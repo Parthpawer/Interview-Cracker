@@ -2,7 +2,10 @@
 
 import os
 
-speech_sdk_path = os.path.join(os.getcwd(), "venv", "Lib", "site-packages", "azure", "cognitiveservices", "speech")
+import azure.cognitiveservices.speech
+
+# Dynamically get the path to the installed package (works for venv and CI/CD)
+speech_sdk_path = os.path.dirname(azure.cognitiveservices.speech.__file__)
 
 block_cipher = None
 
