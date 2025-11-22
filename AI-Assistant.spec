@@ -2,12 +2,12 @@
 
 import os
 
-speech_sdk_path = r"R:\selftaskly\virtual_env\Lib\site-packages\azure\cognitiveservices\speech"
+speech_sdk_path = os.path.join(os.getcwd(), "venv", "Lib", "site-packages", "azure", "cognitiveservices", "speech")
 
 block_cipher = None
 
 a = Analysis(
-    ['index.py'],
+    ['main.py'],
     pathex=[],
     binaries=[
         # All DLLs required by azure-cognitiveservices-speech
@@ -18,6 +18,8 @@ a = Analysis(
         (speech_sdk_path, "azure/cognitiveservices/speech"),
         # Include your .env file for API credentials
         ('.env', '.') if os.path.exists('.env') else None,
+        # Include styles
+        ('styles.qss', '.'),
     ],
     hiddenimports=[
         'azure.cognitiveservices.speech',
@@ -36,6 +38,16 @@ a = Analysis(
         'numpy',
         'dotenv',
         'ctypes',
+        'src',
+        'src.core',
+        'src.core.audio',
+        'src.core.gemini',
+        'src.ui',
+        'src.ui.main_window',
+        'src.ui.widgets',
+        'src.utils',
+        'src.utils.helpers',
+        'src.config',
     ],
     hookspath=[],
     hooksconfig={},

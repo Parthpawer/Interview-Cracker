@@ -10,43 +10,27 @@ from PyQt6.QtWidgets import (
     QPushButton, QTextEdit, QScrollArea, QComboBox, QSizeGrip, QLineEdit,
     QTabWidget, QFrame, QListView
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QPoint, QEvent
-from PyQt6.QtGui import QTextCursor, QMouseEvent
-from PyQt6.QtGui import QCursor
+from PyQt6.QtCore import Qt, pyqtSignal, QObject, QPoint, QEvent, QRect, QTimer
+from PyQt6.QtGui import QTextCursor, QMouseEvent, QCursor
 
-
-# Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv()
 
-
-# Azure Speech SDK
 import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech.audio import AudioStreamFormat, PushAudioInputStream
 
-
-# PyAudioWPatch for WASAPI loopback
 import pyaudiowpatch as pyaudio
 
-
-# For audio resampling
 import numpy as np
 from scipy import signal
 
-
-# For screenshots and hotkeys
 from PIL import ImageGrab
 from pynput import keyboard
 
-
-# Gemini API
 from google import genai
 from google.genai import types
 
-
-# For markdown to HTML conversion
 import markdown
-
 
 
 class TranscriptionSignals(QObject):
@@ -59,7 +43,6 @@ class TranscriptionSignals(QObject):
     add_screenshot_message = pyqtSignal()
     add_assistant_message_start = pyqtSignal()
     add_assistant_chunk = pyqtSignal(str)
-
 
 
 class CustomComboBox(QComboBox):
@@ -78,7 +61,6 @@ class CustomComboBox(QComboBox):
         """Override to apply screen capture exclusion before showing popup"""
         super().showPopup()
         if self.screen_share_hidden:
-            # Apply exclusion to popup window
             popup = self.view().window()
             if popup:
                 hwnd = int(popup.winId())
@@ -89,33 +71,40 @@ class CustomComboBox(QComboBox):
         self.screen_share_hidden = hidden
 
 
-
 class VisibilityApp(QWidget):
     def __init__(self):
         super().__init__()
 
-        # Add these new variables for chunked updates
         self.chunk_buffer = []
         self.last_ui_update = time.time()
         self.update_timer = None
-        # --- FIXED BACKEND SYSTEM PROMPT (Never changes) ---
-        self.FIXED_SYSTEM_PROMPT = """You are a helpful AI assistant integrated into a desktop application. 
-You help users with transcribed audio, screenshots, and general queries. 
-Always provide concise, accurate, and helpful responses."""
+        
+        self.FIXED_SYSTEM_PROMPT = """You are a helpful AI assistant integrated into a desktop application. You help users with transcribed audio, screenshots, and general queries. Always provide concise, accurate, and helpful responses."""
 
-
-        # --- UI Setup ---
         self.setWindowTitle("AI Assistant with Live Transcription")
         self.resize(1200, 700)
+        self.setMinimumSize(400, 300)
         
-        # Set window to always stay on top
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
+        # Frameless window with stay on top
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint | 
+            Qt.WindowType.WindowStaysOnTopHint
+        )
         
-        # Variables for window dragging
+        # Drag and resize tracking
         self.dragging = False
         self.drag_position = QPoint()
-        self.setWindowOpacity(0.6)
-        # Apply modern dark theme stylesheet
+        
+        self.resizing = False
+        self.resize_edge = None
+        self.resize_start_pos = None
+        self.resize_start_geo = None
+        self.border_width = 8
+        
+        self.setMouseTracking(True)
+        self.setWindowOpacity(0.95)
+        
+        # Enhanced styling with border for resize indication
         self.setStyleSheet("""
             QWidget {
                 background-color: #1e1e1e;
@@ -237,36 +226,102 @@ Always provide concise, accurate, and helpful responses."""
             }
         """)
 
-        # Main horizontal layout
-        main_layout = QHBoxLayout()
+        # Main container with border for resize indication
+        container = QWidget()
+        container.setStyleSheet("""
+            QWidget {
+                background-color: #1e1e1e;
+                border: 2px solid #3d3d3d;
+                border-radius: 8px;
+            }
+        """)
+        
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(container)
+        self.setLayout(outer_layout)
+
+        main_layout = QHBoxLayout(container)
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-
-        # Left side - Chat (70-80%)
+        # Left side - Chat
         chat_container = QWidget()
-        chat_container.setMinimumWidth(700)
+        chat_container.setMinimumWidth(400)
         chat_layout = QVBoxLayout(chat_container)
         chat_layout.setContentsMargins(15, 15, 15, 15)
         
-        # Title bar for dragging
-        title_bar = QLabel("🤖 AI Assistant")
-        title_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_bar.setStyleSheet("""
-            background-color: #252525;
-            color: #e0e0e0;
-            font-size: 16px;
-            font-weight: bold;
-            padding: 12px;
-            border-radius: 5px;
-            margin-bottom: 10px;
+        # Title bar with window controls
+        title_bar_widget = QWidget()
+        title_bar_widget.setStyleSheet("""
+            QWidget {
+                background-color: #252525;
+                border-radius: 5px;
+                margin-bottom: 10px;
+            }
         """)
-        title_bar.mousePressEvent = self.title_mouse_press
-        title_bar.mouseMoveEvent = self.title_mouse_move
-        title_bar.mouseReleaseEvent = self.title_mouse_release
-        self.title_label = title_bar
+        title_bar_layout = QHBoxLayout(title_bar_widget)
+        title_bar_layout.setContentsMargins(12, 8, 12, 8)
         
-        # Chat display
+        title_bar = QLabel("🤖 AI Assistant")
+        title_bar.setStyleSheet("""
+            QLabel {
+                background-color: transparent;
+                color: #e0e0e0;
+                font-size: 16px;
+                font-weight: bold;
+                border: none;
+            }
+        """)
+        
+        # Window control buttons
+        minimize_btn = QPushButton("−")
+        minimize_btn.setFixedSize(30, 30)
+        minimize_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2d2d2d;
+                color: #e0e0e0;
+                border: 1px solid #3d3d3d;
+                border-radius: 15px;
+                font-size: 18px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #007acc;
+            }
+        """)
+        minimize_btn.clicked.connect(self.showMinimized)
+        
+        close_btn = QPushButton("×")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2d2d2d;
+                color: #e0e0e0;
+                border: 1px solid #3d3d3d;
+                border-radius: 15px;
+                font-size: 20px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #cc0000;
+            }
+        """)
+        close_btn.clicked.connect(self.close)
+        
+        title_bar_layout.addWidget(title_bar)
+        title_bar_layout.addStretch()
+        title_bar_layout.addWidget(minimize_btn)
+        title_bar_layout.addWidget(close_btn)
+        
+        # Make title bar draggable
+        title_bar_widget.mousePressEvent = self.title_mouse_press
+        title_bar_widget.mouseMoveEvent = self.title_mouse_move
+        title_bar_widget.mouseReleaseEvent = self.title_mouse_release
+        self.title_bar_widget = title_bar_widget
+        
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
         self.chat_display.setPlaceholderText("💬 Chat with AI will appear here...")
@@ -278,12 +333,9 @@ Always provide concise, accurate, and helpful responses."""
                 border-radius: 8px;
                 padding: 15px;
                 font-size: 14px;
-                display: flex;
-                flex-direction: column;
             }
         """)
         
-        # Status and controls bar
         control_bar = QWidget()
         control_bar.setStyleSheet("background-color: #252525; border-radius: 5px; padding: 10px;")
         control_layout = QHBoxLayout(control_bar)
@@ -308,15 +360,14 @@ Always provide concise, accurate, and helpful responses."""
         control_layout.addWidget(self.status_label)
         control_layout.addStretch()
         
-        chat_layout.addWidget(title_bar)
+        chat_layout.addWidget(title_bar_widget)
         chat_layout.addWidget(self.chat_display, stretch=1)
         chat_layout.addWidget(control_bar)
 
-
-        # Right side - Settings (20-30%)
+        # Right side - Settings
         settings_container = QWidget()
         settings_container.setMaximumWidth(400)
-        settings_container.setMinimumWidth(350)
+        settings_container.setMinimumWidth(250)
         settings_container.setStyleSheet("background-color: #252525; border-left: 1px solid #3d3d3d;")
         settings_layout = QVBoxLayout(settings_container)
         settings_layout.setContentsMargins(15, 15, 15, 15)
@@ -324,21 +375,13 @@ Always provide concise, accurate, and helpful responses."""
         settings_title = QLabel("⚙️ Settings")
         settings_title.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px; color: #e0e0e0;")
         
-        # Create tabs for settings
         settings_tabs = QTabWidget()
-        settings_tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #3d3d3d;
-                background-color: #252525;
-            }
-        """)
         
         # Tab 1: API Keys
         api_tab = QWidget()
         api_layout = QVBoxLayout(api_tab)
         api_layout.setSpacing(10)
         
-        # Azure API Key
         api_layout.addWidget(QLabel("Azure Speech API Key:"))
         self.azure_key_input = QLineEdit()
         self.azure_key_input.setPlaceholderText("Enter Azure API key")
@@ -346,14 +389,12 @@ Always provide concise, accurate, and helpful responses."""
         self.azure_key_input.setText(os.getenv('SPEECH_KEY', ''))
         api_layout.addWidget(self.azure_key_input)
         
-        # Azure Region
         api_layout.addWidget(QLabel("Azure Region:"))
         self.azure_region_input = QLineEdit()
         self.azure_region_input.setPlaceholderText("e.g., eastus")
         self.azure_region_input.setText(os.getenv('SPEECH_REGION', ''))
         api_layout.addWidget(self.azure_region_input)
         
-        # Gemini API Key
         api_layout.addWidget(QLabel("Gemini API Key:"))
         self.gemini_key_input = QLineEdit()
         self.gemini_key_input.setPlaceholderText("Enter Gemini API key")
@@ -361,7 +402,6 @@ Always provide concise, accurate, and helpful responses."""
         self.gemini_key_input.setText(os.getenv('GEMINI_API_KEY', '') or os.getenv('GOOGLE_API_KEY', ''))
         api_layout.addWidget(self.gemini_key_input)
         
-        # Save API Keys button
         save_keys_btn = QPushButton("💾 Save API Keys")
         save_keys_btn.clicked.connect(self.save_api_keys)
         api_layout.addWidget(save_keys_btn)
@@ -412,53 +452,31 @@ Always provide concise, accurate, and helpful responses."""
         privacy_layout.addWidget(QLabel("✅ Dropdowns will be hidden\nwhen screen sharing is enabled."))
         privacy_layout.addStretch()
         
-        # Add tabs
         settings_tabs.addTab(api_tab, "🔑 API Keys")
         settings_tabs.addTab(model_tab, "🤖 AI Config")
         settings_tabs.addTab(privacy_tab, "🔒 Privacy")
         
         settings_layout.addWidget(settings_title)
         settings_layout.addWidget(settings_tabs)
+        settings_layout.addStretch()
 
-
-        # Add resize grip
-        self.size_grip = QSizeGrip(self)
-        grip_container = QWidget()
-        grip_container.setStyleSheet("background-color: transparent;")
-        grip_layout = QHBoxLayout(grip_container)
-        grip_layout.addStretch()
-        grip_layout.addWidget(self.size_grip)
-        grip_layout.setContentsMargins(0, 0, 5, 5)
-        settings_layout.addWidget(grip_container)
-
-
-        # Add to main layout
         main_layout.addWidget(chat_container, stretch=7)
         main_layout.addWidget(settings_container, stretch=3)
-        
-        self.setLayout(main_layout)
 
-
-        # --- Event bindings ---
         self.taskbar_toggle.stateChanged.connect(self.toggle_taskbar)
         self.screenshare_toggle.stateChanged.connect(self.toggle_screenshare)
         self.transcribe_button.clicked.connect(self.toggle_transcription)
 
-
-        # --- Windows API setup ---
         self.hwnd = None
         self.user32 = ctypes.windll.user32
         self.WDA_NONE = 0x00
         self.WDA_EXCLUDEFROMCAPTURE = 0x11
 
-
-        # --- Transcription state ---
         self.is_transcribing = False
         self.transcription_thread = None
         self.audio_stream = None
         self.speech_recognizer = None
         
-        # --- Gemini Chat setup ---
         self.additional_instructions = ""
         self.current_model = "gemini-2.0-flash-exp"
         try:
@@ -475,11 +493,9 @@ Always provide concise, accurate, and helpful responses."""
             self.gemini_chat = None
             print(f"Gemini initialization error: {e}")
         
-        # Current assistant message for streaming
         self.current_assistant_message = ""
         self.current_screenshot_bytes = None
         
-        # Signals for thread-safe updates
         self.signals = TranscriptionSignals()
         self.signals.transcription_update.connect(self.update_transcription)
         self.signals.status_update.connect(self.update_status)
@@ -490,22 +506,16 @@ Always provide concise, accurate, and helpful responses."""
         self.signals.add_assistant_message_start.connect(self.start_assistant_message)
         self.signals.add_assistant_chunk.connect(self.add_assistant_chunk)
 
-
-        # --- Global hotkey for screenshot (Alt+X) ---
         self.setup_hotkey()
-
-
-        # Delay handle retrieval until window is shown
         self.showEvent = self._on_show
 
-
     def save_api_keys(self):
-        """Save API keys and reinitialize services"""
+        """Save API keys permanently to .env file and reinitialize services"""
         azure_key = self.azure_key_input.text().strip()
         azure_region = self.azure_region_input.text().strip()
         gemini_key = self.gemini_key_input.text().strip()
         
-        # Save to environment
+        # Save to memory (for current session)
         if azure_key:
             os.environ['SPEECH_KEY'] = azure_key
         if azure_region:
@@ -514,19 +524,40 @@ Always provide concise, accurate, and helpful responses."""
             os.environ['GOOGLE_API_KEY'] = gemini_key
             os.environ['GEMINI_API_KEY'] = gemini_key
         
-        # Reinitialize Gemini
-        if gemini_key:
-            try:
-                self.gemini_client = genai.Client()
-                self.gemini_chat = self.create_gemini_chat()
-                self.signals.status_update.emit("✅ API keys saved successfully!")
-            except Exception as e:
-                self.signals.status_update.emit(f"Error initializing Gemini: {str(e)}")
-        else:
-            self.signals.status_update.emit("⚠️ API keys updated (restart transcription to apply)")
+        # Save to .env file for persistence across app restarts
+        try:
+            env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+            with open(env_path, 'w') as f:
+                if azure_key:
+                    f.write(f'SPEECH_KEY={azure_key}\n')
+                if azure_region:
+                    f.write(f'SPEECH_REGION={azure_region}\n')
+                if gemini_key:
+                    f.write(f'GEMINI_API_KEY={gemini_key}\n')
+            
+            # Reinitialize Gemini client if key provided
+            if gemini_key:
+                try:
+                    self.gemini_client = genai.Client()
+                    self.gemini_chat = self.create_gemini_chat()
+                    self.signals.status_update.emit("✅ API keys saved permanently!")
+                except Exception as e:
+                    self.signals.status_update.emit(f"⚠️ Keys saved but Gemini error: {str(e)}")
+            else:
+                self.signals.status_update.emit("✅ API keys saved permanently!")
+                
+        except Exception as e:
+            # Fallback: keys still work in memory for current session
+            self.signals.status_update.emit(f"⚠️ Saved to memory only. File error: {str(e)}")
+            
+            # Still try to initialize Gemini
+            if gemini_key:
+                try:
+                    self.gemini_client = genai.Client()
+                    self.gemini_chat = self.create_gemini_chat()
+                except Exception as e:
+                    self.signals.status_update.emit(f"Error initializing Gemini: {str(e)}")
 
-
-    # Window dragging methods
     def title_mouse_press(self, event: QMouseEvent):
         """Handle mouse press on title bar for dragging"""
         if event.button() == Qt.MouseButton.LeftButton:
@@ -534,13 +565,11 @@ Always provide concise, accurate, and helpful responses."""
             self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
 
-
     def title_mouse_move(self, event: QMouseEvent):
         """Handle mouse move for window dragging"""
         if self.dragging:
             self.move(event.globalPosition().toPoint() - self.drag_position)
             event.accept()
-
 
     def title_mouse_release(self, event: QMouseEvent):
         """Handle mouse release to stop dragging"""
@@ -548,6 +577,113 @@ Always provide concise, accurate, and helpful responses."""
             self.dragging = False
             event.accept()
 
+    def mousePressEvent(self, event: QMouseEvent):
+        """Handle mouse press for window resizing"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            edge = self.get_resize_edge(event.pos())
+            if edge:
+                self.resizing = True
+                self.resize_edge = edge
+                self.resize_start_pos = event.globalPosition().toPoint()
+                self.resize_start_geo = self.geometry()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        """Handle mouse move for cursor updates and resizing"""
+        if self.resizing and self.resize_edge:
+            self.resize_window(event.globalPosition().toPoint())
+            event.accept()
+        else:
+            edge = self.get_resize_edge(event.pos())
+            self.update_cursor_shape(edge)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """Handle mouse release to stop resizing"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.resizing = False
+            self.resize_edge = None
+            self.resize_start_pos = None
+            self.resize_start_geo = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+        super().mouseReleaseEvent(event)
+
+    def get_resize_edge(self, pos):
+        """Detect which edge/corner is being hovered for resizing"""
+        rect = self.rect()
+        bw = self.border_width
+        
+        on_left = pos.x() <= bw
+        on_right = pos.x() >= rect.width() - bw
+        on_top = pos.y() <= bw
+        on_bottom = pos.y() >= rect.height() - bw
+        
+        if on_top and on_left:
+            return 'top-left'
+        elif on_top and on_right:
+            return 'top-right'
+        elif on_bottom and on_left:
+            return 'bottom-left'
+        elif on_bottom and on_right:
+            return 'bottom-right'
+        elif on_left:
+            return 'left'
+        elif on_right:
+            return 'right'
+        elif on_top:
+            return 'top'
+        elif on_bottom:
+            return 'bottom'
+        return None
+
+    def update_cursor_shape(self, edge):
+        """Update cursor based on resize edge"""
+        if edge == 'top' or edge == 'bottom':
+            self.setCursor(Qt.CursorShape.SizeVerCursor)
+        elif edge == 'left' or edge == 'right':
+            self.setCursor(Qt.CursorShape.SizeHorCursor)
+        elif edge == 'top-left' or edge == 'bottom-right':
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif edge == 'top-right' or edge == 'bottom-left':
+            self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def resize_window(self, global_pos):
+        """Handle window resizing based on drag position"""
+        if not self.resize_start_geo or not self.resize_start_pos:
+            return
+        
+        delta = global_pos - self.resize_start_pos
+        geo = QRect(self.resize_start_geo)
+        
+        if 'left' in self.resize_edge:
+            new_left = geo.left() + delta.x()
+            new_width = geo.width() - delta.x()
+            if new_width >= self.minimumWidth():
+                geo.setLeft(new_left)
+        
+        if 'right' in self.resize_edge:
+            new_width = geo.width() + delta.x()
+            if new_width >= self.minimumWidth():
+                geo.setRight(geo.right() + delta.x())
+        
+        if 'top' in self.resize_edge:
+            new_top = geo.top() + delta.y()
+            new_height = geo.height() - delta.y()
+            if new_height >= self.minimumHeight():
+                geo.setTop(new_top)
+        
+        if 'bottom' in self.resize_edge:
+            new_height = geo.height() + delta.y()
+            if new_height >= self.minimumHeight():
+                geo.setBottom(geo.bottom() + delta.y())
+        
+        if geo.width() >= self.minimumWidth() and geo.height() >= self.minimumHeight():
+            self.setGeometry(geo)
 
     def get_full_system_instruction(self):
         """Combine fixed system prompt with additional instructions"""
@@ -555,7 +691,6 @@ Always provide concise, accurate, and helpful responses."""
             return f"{self.FIXED_SYSTEM_PROMPT}\n\nAdditional Instructions:\n{self.additional_instructions}"
         else:
             return self.FIXED_SYSTEM_PROMPT
-
 
     def create_gemini_chat(self):
         """Create a new Gemini chat instance with combined system instruction and model"""
@@ -574,16 +709,13 @@ Always provide concise, accurate, and helpful responses."""
             print(f"Error creating Gemini chat: {e}")
             return None
 
-
     def on_model_changed(self, model_name):
         """Handle model selection change"""
         self.current_model = model_name
         
-        # Recreate the chat with new model
         if self.gemini_client:
             self.gemini_chat = self.create_gemini_chat()
             self.signals.status_update.emit(f"✅ Model: {model_name}")
-
 
     def update_system_prompt(self):
         """Update the additional instructions and recreate the Gemini chat"""
@@ -591,7 +723,6 @@ Always provide concise, accurate, and helpful responses."""
         
         self.additional_instructions = new_instructions
         
-        # Recreate the chat with updated instructions (appended to fixed prompt)
         if self.gemini_client:
             self.gemini_chat = self.create_gemini_chat()
             
@@ -604,7 +735,6 @@ Always provide concise, accurate, and helpful responses."""
         else:
             self.signals.status_update.emit("Error: Gemini not initialized")
 
-
     def setup_hotkey(self):
         """Setup global hotkey for screenshot"""
         def on_screenshot_hotkey():
@@ -614,7 +744,6 @@ Always provide concise, accurate, and helpful responses."""
             '<alt>+x': on_screenshot_hotkey
         })
         self.hotkey_listener.start()
-
 
     def take_screenshot_safe(self):
         """Thread-safe screenshot handler"""
@@ -626,21 +755,17 @@ Always provide concise, accurate, and helpful responses."""
         
         threading.Thread(target=self._take_screenshot_thread, args=(was_visible,), daemon=True).start()
 
-
     def _take_screenshot_thread(self, was_visible):
         """Take screenshot in separate thread and send to Gemini"""
         try:
             screenshot = ImageGrab.grab()
             
-            # Convert screenshot to bytes
             img_byte_arr = io.BytesIO()
             screenshot.save(img_byte_arr, format='PNG')
             self.current_screenshot_bytes = img_byte_arr.getvalue()
             
-            # Add screenshot message to chat
             self.signals.add_screenshot_message.emit()
             
-            # Send to Gemini
             self.send_screenshot_to_gemini(self.current_screenshot_bytes)
             
             self.signals.status_update.emit("Screenshot captured and sent to AI")
@@ -649,7 +774,6 @@ Always provide concise, accurate, and helpful responses."""
         finally:
             if was_visible:
                 self.signals.restore_window_signal.emit()
-
 
     def restore_window(self):
         """Restore window to front after screenshot"""
@@ -672,52 +796,42 @@ Always provide concise, accurate, and helpful responses."""
             self.setWindowFlags(flags | Qt.WindowType.WindowStaysOnTopHint)
             self.show()
 
-
     def _on_show(self, event):
-        """Called when the window first appears; captures HWND handle."""
+        """Called when the window first appears; captures HWND handle"""
         self.hwnd = self.user32.FindWindowW(None, self.windowTitle())
 
-
     def toggle_taskbar(self):
-        """Hide or show the app in Windows taskbar."""
+        """Hide or show the app in Windows taskbar"""
         if self.taskbar_toggle.isChecked():
-            self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint)
+            self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
             self.show()
         else:
-            self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
+            self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
             self.show()
-
 
     def toggle_screenshare(self):
         """Exclude or include window from screen capture (Teams, Zoom, etc.)"""
         if not self.hwnd:
             self.hwnd = self.user32.FindWindowW(None, self.windowTitle())
 
-
         if self.hwnd:
             if self.screenshare_toggle.isChecked():
                 self.user32.SetWindowDisplayAffinity(self.hwnd, self.WDA_EXCLUDEFROMCAPTURE)
-                # Enable screen share hiding for combo boxes
                 self.model_selector.set_screen_share_hidden(True)
             else:
                 self.user32.SetWindowDisplayAffinity(self.hwnd, self.WDA_NONE)
-                # Disable screen share hiding for combo boxes
                 self.model_selector.set_screen_share_hidden(False)
-
 
     def markdown_to_html(self, text):
         """Convert markdown text to HTML with custom theme colors"""
         html = markdown.markdown(text, extensions=['extra', 'nl2br', 'sane_lists', 'fenced_code'])
-        # Apply theme colors to code blocks - darker for assistant messages
         html = html.replace('<code>', '<code style="background-color: #2d0708; color: #ffb3b5; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; font-size: 0.9em; border: 1px solid #5d1619;">')
         html = html.replace('<pre>', '<pre style="background-color: #2d0708; color: #f57173; padding: 16px; border-radius: 8px; overflow-x: auto; border: 1px solid #5d1619; margin: 10px 0;">')
         html = html.replace('<pre><code>', '<pre><code style="background-color: transparent; color: #f57173; padding: 0;">')
         return html
 
-
-
     def add_user_message_to_chat(self, text):
-        """Add user message (transcribed text) to chat display - Custom green theme"""
+        """Add user message (transcribed text) to chat display"""
         print(f"[add_user_message_to_chat] Adding user message: {text[:50]}...")
         self.chat_display.append(f'''
             <br>
@@ -741,7 +855,6 @@ Always provide concise, accurate, and helpful responses."""
         ''')
         self.scroll_to_bottom()
         print("[add_user_message_to_chat] User message added")
-
 
     def add_screenshot_message_to_chat(self):
         """Add screenshot message to chat display"""
@@ -767,14 +880,12 @@ Always provide concise, accurate, and helpful responses."""
         self.scroll_to_bottom()
         print("[add_screenshot_message_to_chat] Screenshot message added")
 
-
     def start_assistant_message(self):
         """Start a new assistant message"""
         print("[start_assistant_message] Starting new assistant message")
         self.current_assistant_message = ""
         self.assistant_message_start_pos = len(self.chat_display.toPlainText())
         
-        # Add initial empty message block with a unique marker
         self.chat_display.append(f'''
             <div style="margin: 15px 0; clear: both;">
                 <div style="
@@ -788,7 +899,7 @@ Always provide concise, accurate, and helpful responses."""
                     border: 1px solid #5d1619;
                     display: block;
                 ">
-                    <div style="margin-bottom: 6px; font-weight: 600; color: #ff9597; font-size: 12px;"></div>
+                    <div style="margin-bottom: 6px; font-weight: 600; color: #ff9597; font-size: 12px;">🤖 AI Assistant</div>
                     <div style="color: #f57173;"><span id="asst_content_placeholder"></span></div>
                 </div>
             </div>
@@ -797,43 +908,41 @@ Always provide concise, accurate, and helpful responses."""
         self.scroll_to_bottom()
         print("[start_assistant_message] Assistant message placeholder added")
 
-
-
     def add_assistant_chunk(self, chunk):
-        """Buffer chunks and update UI periodically to reduce flicker"""
+        """Buffer chunks and update UI periodically to reduce flicker - THREAD SAFE"""
         self.chunk_buffer.append(chunk)
         current_time = time.time()
         
-        # Update every 150ms or when buffer is large (smoother UI)
+        # Check if we should update, but DON'T call render directly from signal handler
+        # The signal connection ensures this runs in the main thread
         if current_time - self.last_ui_update > 0.15 or len(self.chunk_buffer) > 8:
-            self._render_assistant_message()
+            # Safely update in main GUI thread
+            self._render_assistant_message_safe()
 
+    def _render_assistant_message_safe(self):
+        """Thread-safe wrapper for rendering assistant message"""
+        # This ensures rendering happens in the main GUI thread
+        if not self.chunk_buffer:
+            return
+        self._render_assistant_message()
 
     def _render_assistant_message(self):
-        """Actually render the accumulated assistant message"""
+        """Actually render the accumulated assistant message - MUST run in main thread"""
         if not self.chunk_buffer:
             return
         
-        # Add buffered chunks to the message
         self.current_assistant_message += ''.join(self.chunk_buffer)
         self.chunk_buffer = []
         self.last_ui_update = time.time()
         
-        # Convert to HTML
         html_content = self.markdown_to_html(self.current_assistant_message)
         
-        # Get the full document HTML
-        full_html = self.chat_display.toHtml()
-        
-        # Find if we already have an assistant message at the saved position
         cursor = self.chat_display.textCursor()
         
-        # Move to saved position and clear everything after it
         cursor.setPosition(self.assistant_message_start_pos)
         cursor.movePosition(QTextCursor.MoveOperation.End, QTextCursor.MoveMode.KeepAnchor)
         cursor.removeSelectedText()
         
-        # Insert the complete updated message
         cursor.insertHtml(f'''
             <div style="margin: 12px 0; display: block;">
                 <div style="
@@ -846,7 +955,7 @@ Always provide concise, accurate, and helpful responses."""
                     line-height: 1.6;
                     border: 1px solid #5d1619;
                 ">
-                    <div style="margin-bottom: 6px; font-weight: 600; color: #ff9597; font-size: 12px;"></div>
+                    <div style="margin-bottom: 6px; font-weight: 600; color: #ff9597; font-size: 12px;">🤖 AI Assistant</div>
                     <div style="color: #f57173;">{html_content}</div>
                 </div>
                 <br>
@@ -855,13 +964,10 @@ Always provide concise, accurate, and helpful responses."""
         
         self.scroll_to_bottom()
 
-
-
     def scroll_to_bottom(self):
         """Scroll chat to bottom"""
         scrollbar = self.chat_display.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
-
 
     def send_to_gemini(self, text):
         """Send transcribed text to Gemini and stream response"""
@@ -880,9 +986,10 @@ Always provide concise, accurate, and helpful responses."""
                     if hasattr(chunk, 'text') and chunk.text:
                         self.signals.add_assistant_chunk.emit(chunk.text)
                 
-                # IMPORTANT: Flush any remaining buffered chunks
+                # Flush remaining chunks in main thread using QTimer
                 if self.chunk_buffer:
-                    self._render_assistant_message()
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, self._render_assistant_message_safe)
                 
             except Exception as e:
                 self.signals.status_update.emit(f"Gemini error: {str(e)}")
@@ -913,11 +1020,15 @@ Always provide concise, accurate, and helpful responses."""
                     if hasattr(chunk, 'text') and chunk.text:
                         self.signals.add_assistant_chunk.emit(chunk.text)
                 
+                # Flush remaining chunks in main thread using QTimer
+                if self.chunk_buffer:
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, self._render_assistant_message_safe)
+                
             except Exception as e:
                 self.signals.status_update.emit(f"Gemini screenshot error: {str(e)}")
         
         threading.Thread(target=gemini_screenshot_worker, daemon=True).start()
-
 
     def toggle_transcription(self):
         """Start or stop live transcription"""
@@ -926,17 +1037,14 @@ Always provide concise, accurate, and helpful responses."""
         else:
             self.stop_transcription()
 
-
     def start_transcription(self):
         """Start capturing system audio and transcribing"""
         api_key = self.azure_key_input.text() or os.getenv('SPEECH_KEY')
         region = self.azure_region_input.text() or os.getenv('SPEECH_REGION')
 
-
         if not api_key or not region:
             self.signals.status_update.emit("Error: Set Azure API key and region in Settings")
             return
-
 
         self.is_transcribing = True
         self.transcribe_button.setText("⏹ Stop Transcription")
@@ -953,14 +1061,12 @@ Always provide concise, accurate, and helpful responses."""
         """)
         self.signals.status_update.emit("Status: Starting transcription...")
 
-
         self.transcription_thread = threading.Thread(
             target=self._transcription_worker,
             args=(api_key, region),
             daemon=True
         )
         self.transcription_thread.start()
-
 
     def stop_transcription(self):
         """Stop transcription"""
@@ -979,13 +1085,11 @@ Always provide concise, accurate, and helpful responses."""
         """)
         self.signals.status_update.emit("Status: Stopped | Press Alt+X for screenshot")
 
-
         if self.speech_recognizer:
             try:
                 self.speech_recognizer.stop_continuous_recognition()
             except:
                 pass
-
 
     def update_transcription(self, text):
         """Handle transcribed text - partial or final"""
@@ -993,7 +1097,6 @@ Always provide concise, accurate, and helpful responses."""
             clean_text = text.replace("✅", "").strip()
             if clean_text:
                 self.send_to_gemini(clean_text)
-
 
     def resample_audio(self, audio_data, orig_rate, target_rate=16000):
         """Resample audio to target rate"""
@@ -1003,7 +1106,6 @@ Always provide concise, accurate, and helpful responses."""
             return resampled.astype(np.int16)
         except:
             return audio_data
-
 
     def _transcription_worker(self, api_key, region):
         """Worker thread for audio capture and transcription"""
@@ -1101,11 +1203,9 @@ Always provide concise, accurate, and helpful responses."""
             except:
                 pass
 
-
     def update_status(self, status):
         """Update status label (thread-safe)"""
         self.status_label.setText(status)
-
 
     def closeEvent(self, event):
         """Cleanup on close"""
@@ -1118,13 +1218,9 @@ Always provide concise, accurate, and helpful responses."""
         event.accept()
 
 
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setOverrideCursor(QCursor(Qt.CursorShape.ArrowCursor))
     window = VisibilityApp()
     window.show()
     sys.exit(app.exec())
-
-
-

@@ -1,0 +1,218 @@
+/* Main Window */
+QWidget {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+}
+
+/* Labels */
+QLabel {
+    color: #e0e0e0;
+}
+
+/* Buttons */
+QPushButton {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #3d3d3d;
+    border-radius: 5px;
+    padding: 8px 15px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #3d3d3d;
+    border: 1px solid #4d4d4d;
+}
+QPushButton:pressed {
+    background-color: #252525;
+}
+
+/* Input Fields */
+QLineEdit {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #3d3d3d;
+    border-radius: 5px;
+    padding: 8px;
+}
+QLineEdit:focus {
+    border: 1px solid #007acc;
+}
+
+/* Text Areas */
+QTextEdit {
+    background-color: #252525;
+    color: #e0e0e0;
+    border: 1px solid #3d3d3d;
+    border-radius: 5px;
+    padding: 10px;
+}
+
+/* Combo Boxes */
+QComboBox {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #3d3d3d;
+    border-radius: 5px;
+    padding: 8px;
+}
+QComboBox:hover {
+    border: 1px solid #4d4d4d;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+QComboBox::down-arrow {
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 5px solid #e0e0e0;
+}
+QComboBox QAbstractItemView {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    selection-background-color: #007acc;
+    border: 1px solid #3d3d3d;
+}
+
+/* Checkboxes */
+QCheckBox {
+    color: #e0e0e0;
+    spacing: 8px;
+}
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    border: 1px solid #3d3d3d;
+    background-color: #2d2d2d;
+}
+QCheckBox::indicator:checked {
+    background-color: #007acc;
+    border: 1px solid #007acc;
+}
+
+/* Tab Widget */
+QTabWidget::pane {
+    border: 1px solid #3d3d3d;
+    background-color: #1e1e1e;
+    border-radius: 5px;
+}
+QTabBar::tab {
+    background-color: #2d2d2d;
+    color: #a0a0a0;
+    border: 1px solid #3d3d3d;
+    padding: 10px 20px;
+    margin-right: 2px;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+}
+QTabBar::tab:selected {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+    border-bottom: 1px solid #1e1e1e;
+}
+QTabBar::tab:hover:!selected {
+    background-color: #3d3d3d;
+}
+
+/* Scrollbars */
+QScrollBar:vertical {
+    background-color: #2d2d2d;
+    width: 12px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    background-color: #4d4d4d;
+    border-radius: 6px;
+    min-height: 20px;
+}
+QScrollBar::handle:vertical:hover {
+    background-color: #5d5d5d;
+}
+
+/* Custom Classes */
+.main-container {
+    background-color: #1e1e1e;
+    border: 2px solid #3d3d3d;
+    border-radius: 8px;
+}
+
+.title-bar {
+    background-color: #252525;
+    border-radius: 5px;
+    margin-bottom: 10px;
+}
+
+.title-label {
+    background-color: transparent;
+    color: #e0e0e0;
+    font-size: 16px;
+    font-weight: bold;
+    border: none;
+}
+
+.window-control-btn {
+    background-color: #2d2d2d;
+    color: #e0e0e0;
+    border: 1px solid #3d3d3d;
+    border-radius: 15px;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 0px;
+}
+.window-control-btn:hover {
+    background-color: #007acc;
+}
+.close-btn:hover {
+    background-color: #cc0000;
+}
+
+.chat-display {
+    background-color: #252525;
+    color: #e0e0e0;
+    border: 1px solid #3d3d3d;
+    border-radius: 8px;
+    padding: 15px;
+    font-size: 14px;
+}
+
+.control-bar {
+    background-color: #252525;
+    border-radius: 5px;
+    padding: 10px;
+}
+
+.transcribe-btn {
+    background-color: #007acc;
+    color: white;
+    font-weight: bold;
+    padding: 10px 20px;
+}
+.transcribe-btn:hover {
+    background-color: #0098ff;
+}
+.transcribe-btn-active {
+    background-color: #cc0000;
+    color: white;
+    font-weight: bold;
+    padding: 10px 20px;
+}
+.transcribe-btn-active:hover {
+    background-color: #ff0000;
+}
+
+.settings-container {
+    background-color: #252525;
+    border-left: 1px solid #3d3d3d;
+}
+
+.settings-title {
+    font-size: 16px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: #e0e0e0;
+}
