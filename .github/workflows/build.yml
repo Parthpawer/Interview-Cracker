@@ -38,7 +38,20 @@ jobs:
         name: AI-Assistant-Build
         path: dist/AI-Assistant.exe
 
-    - name: Create Release
+    # 1. Automatic "Latest" Release on push to main
+    - name: Update Latest Release
+      if: github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: latest
+        name: Latest Build (Nightly)
+        files: dist/AI-Assistant.exe
+        prerelease: true
+        overwrite: true
+        body: "Automatic build from the latest code on `main`."
+
+    # 2. Versioned Release on tag push (e.g. v1.0.0)
+    - name: Create Version Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v1
       with:
