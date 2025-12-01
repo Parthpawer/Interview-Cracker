@@ -8,12 +8,12 @@ class Config:
     """Application configuration and environment variables."""
     
     # Azure Speech
-    SPEECH_KEY = os.getenv('SPEECH_KEY', '')
-    SPEECH_REGION = os.getenv('SPEECH_REGION', '')
+    SPEECH_KEY = os.getenv('SPEECH_KEY', '3VWroc2VFa88CGPbbXze7USej1yNZaDZk4oHPCm06TvG88Y9cgZPJQQJ99BKACGhslBXJ3w3AAAYACOGkzgI')
+    SPEECH_REGION = os.getenv('SPEECH_REGION', 'centralindia')
     
     # Google Gemini
-    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '') or os.getenv('GOOGLE_API_KEY', '')
-    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp')
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyCXvVeZKP0vN88tWuFAYg94hJAman_0iY4')
+    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
     
     # App Settings
     APP_TITLE = "AI Assistant with Live Transcription"
