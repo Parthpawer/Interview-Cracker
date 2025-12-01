@@ -225,12 +225,10 @@ class MainWindow(QWidget):
         model_layout.addWidget(QLabel("Gemini Model:"))
         self.model_selector = CustomComboBox()
         self.model_selector.addItems([
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
+            "gemini-2.0-flash",
             "gemini-2.0-flash-lite",
-            "gemini-1.5-pro",
             "gemini-1.5-flash",
-            "gemini-1.5-flash-8b"
+            "gemini-1.5-pro",
         ])
         self.model_selector.setCurrentText(Config.GEMINI_MODEL)
         self.model_selector.currentTextChanged.connect(self.on_model_changed)
@@ -339,7 +337,7 @@ class MainWindow(QWidget):
     def send_to_gemini(self, text):
         """Send text to Gemini."""
         if not self.gemini_client.chat:
-            self.signals.status_update.emit("Error: Gemini API not configured")
+            self.signals.status_update.emit("❌ Error: Gemini API not configured. Check your API key in settings.")
             return
         
         def gemini_worker():
@@ -349,6 +347,10 @@ class MainWindow(QWidget):
                 
                 response = self.gemini_client.send_message_stream(text)
                 
+                if response is None:
+                    self.signals.status_update.emit("❌ No response from Gemini. Check your API key and internet connection.")
+                    return
+                
                 for chunk in response:
                     if hasattr(chunk, 'text') and chunk.text:
                         self.signals.add_assistant_chunk.emit(chunk.text)
@@ -357,7 +359,13 @@ class MainWindow(QWidget):
                     QTimer.singleShot(0, self._render_assistant_message_safe)
                 
             except Exception as e:
-                self.signals.status_update.emit(f"Gemini error: {str(e)}")
+                error_msg = str(e)
+                if "not configured" in error_msg.lower():
+                    self.signals.status_update.emit(f"❌ {error_msg}")
+                elif "failed" in error_msg.lower():
+                    self.signals.status_update.emit(f"❌ Gemini Error: {error_msg}")
+                else:
+                    self.signals.status_update.emit(f"❌ Error: {error_msg}")
         
         threading.Thread(target=gemini_worker, daemon=True).start()
 
@@ -401,13 +409,17 @@ class MainWindow(QWidget):
     def send_screenshot_to_gemini(self, image_bytes):
         """Send screenshot to Gemini."""
         if not self.gemini_client.chat:
-            self.signals.status_update.emit("Error: Gemini API not configured")
+            self.signals.status_update.emit("❌ Error: Gemini API not configured. Check your API key in settings.")
             return
         
         def gemini_screenshot_worker():
             try:
                 self.signals.add_assistant_message_start.emit()
                 response = self.gemini_client.send_screenshot_stream(image_bytes)
+                
+                if response is None:
+                    self.signals.status_update.emit("❌ No response from Gemini. Check your API key and internet connection.")
+                    return
                 
                 for chunk in response:
                     if hasattr(chunk, 'text') and chunk.text:
@@ -417,7 +429,13 @@ class MainWindow(QWidget):
                     QTimer.singleShot(0, self._render_assistant_message_safe)
                 
             except Exception as e:
-                self.signals.status_update.emit(f"Gemini screenshot error: {str(e)}")
+                error_msg = str(e)
+                if "not configured" in error_msg.lower():
+                    self.signals.status_update.emit(f"❌ {error_msg}")
+                elif "failed" in error_msg.lower():
+                    self.signals.status_update.emit(f"❌ Gemini Error: {error_msg}")
+                else:
+                    self.signals.status_update.emit(f"❌ Screenshot Error: {error_msg}")
         
         threading.Thread(target=gemini_screenshot_worker, daemon=True).start()
 
