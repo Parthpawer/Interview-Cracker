@@ -11,6 +11,7 @@ class GeminiClient:
 
     # List of fallback models in order of preference
     FALLBACK_MODELS = [
+        "gemini-2.5-flash",
         "gemini-2.0-flash",
         "gemini-2.0-flash-lite",
         "gemini-1.5-flash",
@@ -72,7 +73,7 @@ class GeminiClient:
 
     def _attempt_send(self, model_name, text):
         """Helper to send a message using a specific model.
-        Returns a generator if successful, None otherwise.
+        Returns (generator, error_message). generator is None if failed.
         """
         original = self.current_model
         if model_name != original:
@@ -86,16 +87,16 @@ class GeminiClient:
                     for chunk in stream:
                         yield chunk
                 print(f"✓ Gemini model {model_name} succeeded")
-                return response_gen()
+                return response_gen(), None
             else:
                 print(f"✗ Gemini model {model_name} returned empty response")
-                return None
+                return None, "Empty response"
         except StopIteration:
             print(f"✗ Gemini model {model_name} returned empty stream")
-            return None
+            return None, "Empty stream"
         except Exception as e:
             print(f"✗ Gemini model {model_name} failed: {e}")
-            return None
+            return None, str(e)
         finally:
             if model_name != original:
                 self.update_model(original)
@@ -105,24 +106,27 @@ class GeminiClient:
         Tries the current model first, then falls back through the list.
         """
         if not self.chat:
-            raise Exception("Gemini API not configured. Please check your API key in settings.")
-        
+            raise Exception("Gemini API not configured")
+            
         errors = []
         
         # Try current model
-        response = self._attempt_send(self.current_model, text)
-        if response:
-            return response
+        gen, err = self._attempt_send(self.current_model, text)
+        if gen:
+            return gen
+        errors.append(f"{self.current_model}: {err}")
         
         # Try fallbacks
         for fallback in self.FALLBACK_MODELS:
             if fallback == self.current_model:
                 continue
-            response = self._attempt_send(fallback, text)
-            if response:
-                return response
-        
-        raise Exception("All Gemini models failed. Please verify:\n1. API key is valid and not leaked\n2. You have internet connection\n3. API quota is not exceeded")
+            gen, err = self._attempt_send(fallback, text)
+            if gen:
+                return gen
+            errors.append(f"{fallback}: {err}")
+            
+        error_summary = "; ".join(errors)
+        raise Exception(f"All Gemini models failed. Details: {error_summary}")
 
     def send_screenshot_stream(self, image_bytes, prompt="What do you see in this screenshot? Please describe it and provide any relevant insights or help."):
         """Send screenshot and yield stream response."""

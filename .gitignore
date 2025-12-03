@@ -13,3 +13,7 @@ ai_assistant_resize.py
 /src/__pycache__
 /src/ui/__pycache__
 /src/core/__pycache__
+/src/ui/__pycache__
+/venv
+/src/utils/__pycache__
+/src/ui/__pycache__

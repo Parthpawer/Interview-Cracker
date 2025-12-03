@@ -12,7 +12,7 @@ class Config:
     SPEECH_REGION = os.getenv('SPEECH_REGION', 'centralindia')
     
     # Google Gemini
-    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', 'AIzaSyCXvVeZKP0vN88tWuFAYg94hJAman_0iY4')
+    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
     GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
     
     # App Settings
