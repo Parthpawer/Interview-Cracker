@@ -1,6 +1,12 @@
 import threading
 import numpy as np
-import pyaudiowpatch as pyaudio
+try:
+    import pyaudiowpatch as pyaudio
+except ImportError:
+    try:
+        import pyaudio
+    except ImportError:
+        pyaudio = None
 import azure.cognitiveservices.speech as speechsdk
 from azure.cognitiveservices.speech.audio import AudioStreamFormat, PushAudioInputStream
 from src.config import Config
@@ -18,6 +24,10 @@ class AudioTranscriber:
 
     def start(self, api_key, region):
         """Start transcription."""
+        if not pyaudio:
+            self.signals.status_update.emit("Error: PyAudio not installed. Transcription disabled.")
+            return False
+
         if not api_key or not region:
             self.signals.status_update.emit("Error: Set Azure API key and region in Settings")
             return False
@@ -74,17 +84,26 @@ class AudioTranscriber:
             self.speech_recognizer.start_continuous_recognition()
             
             p = pyaudio.PyAudio()
-            wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+            try:
+                wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+            except (AttributeError, OSError):
+                self.signals.status_update.emit("Error: WASAPI not supported")
+                return
+
             default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
             
             loopback_device = None
             if default_speakers.get("isLoopbackDevice"):
                 loopback_device = default_speakers
             else:
-                for loopback in p.get_loopback_device_info_generator():
-                    if default_speakers["name"] in loopback["name"]:
-                        loopback_device = loopback
-                        break
+                if hasattr(p, 'get_loopback_device_info_generator'):
+                    for loopback in p.get_loopback_device_info_generator():
+                        if default_speakers["name"] in loopback["name"]:
+                            loopback_device = loopback
+                            break
+                else:
+                    self.signals.status_update.emit("Error: Install pyaudiowpatch for system audio")
+                    return
             
             if not loopback_device:
                 self.signals.status_update.emit("Error: No loopback device found")

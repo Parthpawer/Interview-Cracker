@@ -6,7 +6,8 @@ import threading
 import ctypes
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, 
-    QPushButton, QTextEdit, QTabWidget, QLineEdit, QScrollArea
+    QPushButton, QTextEdit, QTabWidget, QLineEdit, QScrollArea,
+    QDialog, QFormLayout, QDialogButtonBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QPoint, QRect, QTimer
 from PyQt6.QtGui import QTextCursor, QMouseEvent, QCursor
@@ -59,7 +60,7 @@ class MainWindow(QWidget):
         self.border_width = 8
         
         self.setMouseTracking(True)
-        self.setWindowOpacity(0.95)
+        self.setWindowOpacity(0.53)
         
         # Load Styles
         self.load_styles()
@@ -67,14 +68,15 @@ class MainWindow(QWidget):
         # Setup UI
         self.setup_ui()
         
+        # Show Startup Dialog
+        QTimer.singleShot(100, self.show_startup_dialog)
+        
         # Initialize Core Modules
         self.signals = TranscriptionSignals()
         self.connect_signals()
         
         self.audio_transcriber = AudioTranscriber(self.signals)
         self.gemini_client = GeminiClient()
-        
-        # Windows API
         self.hwnd = None
         self.user32 = ctypes.windll.user32
         self.WDA_NONE = 0x00
@@ -223,13 +225,10 @@ class MainWindow(QWidget):
         model_layout.addWidget(QLabel("Gemini Model:"))
         self.model_selector = CustomComboBox()
         self.model_selector.addItems([
-            "gemini-2.0-flash-exp",
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
+            "gemini-2.0-flash",
             "gemini-2.0-flash-lite",
-            "gemini-1.5-pro",
             "gemini-1.5-flash",
-            "gemini-1.5-flash-8b"
+            "gemini-1.5-pro",
         ])
         self.model_selector.setCurrentText(Config.GEMINI_MODEL)
         self.model_selector.currentTextChanged.connect(self.on_model_changed)
@@ -338,7 +337,7 @@ class MainWindow(QWidget):
     def send_to_gemini(self, text):
         """Send text to Gemini."""
         if not self.gemini_client.chat:
-            self.signals.status_update.emit("Error: Gemini API not configured")
+            self.signals.status_update.emit("❌ Error: Gemini API not configured. Check your API key in settings.")
             return
         
         def gemini_worker():
@@ -348,6 +347,10 @@ class MainWindow(QWidget):
                 
                 response = self.gemini_client.send_message_stream(text)
                 
+                if response is None:
+                    self.signals.status_update.emit("❌ No response from Gemini. Check your API key and internet connection.")
+                    return
+                
                 for chunk in response:
                     if hasattr(chunk, 'text') and chunk.text:
                         self.signals.add_assistant_chunk.emit(chunk.text)
@@ -356,7 +359,13 @@ class MainWindow(QWidget):
                     QTimer.singleShot(0, self._render_assistant_message_safe)
                 
             except Exception as e:
-                self.signals.status_update.emit(f"Gemini error: {str(e)}")
+                error_msg = str(e)
+                if "not configured" in error_msg.lower():
+                    self.signals.status_update.emit(f"❌ {error_msg}")
+                elif "failed" in error_msg.lower():
+                    self.signals.status_update.emit(f"❌ Gemini Error: {error_msg}")
+                else:
+                    self.signals.status_update.emit(f"❌ Error: {error_msg}")
         
         threading.Thread(target=gemini_worker, daemon=True).start()
 
@@ -400,13 +409,17 @@ class MainWindow(QWidget):
     def send_screenshot_to_gemini(self, image_bytes):
         """Send screenshot to Gemini."""
         if not self.gemini_client.chat:
-            self.signals.status_update.emit("Error: Gemini API not configured")
+            self.signals.status_update.emit("❌ Error: Gemini API not configured. Check your API key in settings.")
             return
         
         def gemini_screenshot_worker():
             try:
                 self.signals.add_assistant_message_start.emit()
                 response = self.gemini_client.send_screenshot_stream(image_bytes)
+                
+                if response is None:
+                    self.signals.status_update.emit("❌ No response from Gemini. Check your API key and internet connection.")
+                    return
                 
                 for chunk in response:
                     if hasattr(chunk, 'text') and chunk.text:
@@ -416,7 +429,13 @@ class MainWindow(QWidget):
                     QTimer.singleShot(0, self._render_assistant_message_safe)
                 
             except Exception as e:
-                self.signals.status_update.emit(f"Gemini screenshot error: {str(e)}")
+                error_msg = str(e)
+                if "not configured" in error_msg.lower():
+                    self.signals.status_update.emit(f"❌ {error_msg}")
+                elif "failed" in error_msg.lower():
+                    self.signals.status_update.emit(f"❌ Gemini Error: {error_msg}")
+                else:
+                    self.signals.status_update.emit(f"❌ Screenshot Error: {error_msg}")
         
         threading.Thread(target=gemini_screenshot_worker, daemon=True).start()
 
@@ -693,3 +712,68 @@ class MainWindow(QWidget):
             self.hotkey_listener.stop()
         
         event.accept()
+
+    def show_startup_dialog(self):
+        """Show dialog to get Resume context at startup."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Startup Configuration")
+        dialog.setMinimumWidth(450)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Header
+        header = QLabel("👋 Welcome! Please configure your AI Assistant.")
+        header.setStyleSheet("font-size: 14px; font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(header)
+        
+        # Resume Context
+        layout.addWidget(QLabel("📝 Resume / Context (Optional):"))
+        layout.addWidget(QLabel("Paste your resume or specific instructions here to help the AI understand your background."))
+        
+        resume_input = QTextEdit()
+        resume_input.setPlaceholderText("Paste resume text here...")
+        resume_input.setMinimumHeight(120)
+        layout.addWidget(resume_input)
+        
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        # Style the dialog
+        dialog.setStyleSheet("""
+            QDialog { background-color: #1e1e1e; color: #ffffff; }
+            QLabel { color: #ffffff; }
+            QLineEdit, QTextEdit { 
+                background-color: #2d2d2d; 
+                color: #ffffff; 
+                border: 1px solid #3d3d3d;
+                padding: 5px;
+                border-radius: 4px;
+            }
+            QPushButton {
+                background-color: #0d6efd;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #0b5ed7; }
+        """)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            resume_text = resume_input.toPlainText().strip()
+            
+            # Update System Prompt with Resume
+            if resume_text:
+                current_prompt = self.system_prompt_input.toPlainText()
+                new_prompt = f"{current_prompt}\n\n### User Resume / Context ###\n{resume_text}".strip()
+                self.system_prompt_input.setText(new_prompt)
+                self.gemini_client.update_instructions(new_prompt)
+                self.signals.status_update.emit("✅ Resume context saved!")
+            else:
+                self.signals.status_update.emit("✅ Ready!")
+
