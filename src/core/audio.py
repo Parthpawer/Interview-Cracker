@@ -2,7 +2,9 @@ import threading
 import numpy as np
 try:
     import pyaudiowpatch as pyaudio
+    HAS_PYAUDIOWPATCH = True
 except ImportError:
+    HAS_PYAUDIOWPATCH = False
     try:
         import pyaudio
     except ImportError:
@@ -25,7 +27,7 @@ class AudioTranscriber:
     def start(self, api_key, region):
         """Start transcription."""
         if not pyaudio:
-            self.signals.status_update.emit("Error: PyAudio not installed. Transcription disabled.")
+            self.signals.status_update.emit("❌ PyAudio not installed. Transcription disabled. Try: pip install pyaudio")
             return False
 
         if not api_key or not region:
@@ -69,12 +71,17 @@ class AudioTranscriber:
             
             def recognized_cb(evt):
                 if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    print(f"✓ Recognized: {evt.result.text}")
                     self.signals.transcription_update.emit(f"✅ {evt.result.text}")
+                elif evt.result.reason == speechsdk.ResultReason.NoMatch:
+                    print(f"⚠️ No speech recognized in audio")
+                    self.signals.status_update.emit("⚠️ No speech detected in that audio segment")
             
             def canceled_cb(evt):
                 error_msg = f"Recognition canceled: {evt.result.cancellation_details.reason}"
                 if evt.result.cancellation_details.error_details:
                     error_msg += f" - {evt.result.cancellation_details.error_details}"
+                print(f"✗ {error_msg}")
                 self.signals.status_update.emit(f"Error: {error_msg}")
                 self.is_transcribing = False
             
@@ -93,6 +100,7 @@ class AudioTranscriber:
             default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
             
             loopback_device = None
+            is_loopback = True
             if default_speakers.get("isLoopbackDevice"):
                 loopback_device = default_speakers
             else:
@@ -102,8 +110,18 @@ class AudioTranscriber:
                             loopback_device = loopback
                             break
                 else:
-                    self.signals.status_update.emit("Error: Install pyaudiowpatch for system audio")
-                    return
+                    # Fall back to default input device (microphone) if WASAPI loopback isn't available.
+                    try:
+                        default_input = p.get_default_input_device_info()
+                        loopback_device = default_input
+                        is_loopback = False
+                        msg = "⚠️ WASAPI loopback not available. Using microphone instead."
+                        if not HAS_PYAUDIOWPATCH:
+                            msg += " Install pyaudiowpatch for system audio: pip install pyaudiowpatch"
+                        self.signals.status_update.emit(msg)
+                    except Exception as e:
+                        self.signals.status_update.emit(f"❌ Error: Install pyaudiowpatch or update audio drivers. Details: {str(e)}")
+                        return
             
             if not loopback_device:
                 self.signals.status_update.emit("Error: No loopback device found")
@@ -123,6 +141,7 @@ class AudioTranscriber:
             )
             
             self.signals.status_update.emit("Status: Recording and transcribing...")
+            silent_frames = 0
             
             while self.is_transcribing:
                 try:
@@ -135,10 +154,21 @@ class AudioTranscriber:
                     if device_rate != 16000:
                         audio_data = resample_audio(audio_data, device_rate, 16000)
                     
+                    # Check if audio has meaningful signal (not silent)
+                    audio_level = np.abs(audio_data).mean()
+                    if audio_level < 100:  # Very quiet threshold
+                        silent_frames += 1
+                        if silent_frames > 50:
+                            self.signals.status_update.emit("⚠️ No sound detected. Check microphone levels or try speaking louder.")
+                            silent_frames = 0
+                    else:
+                        silent_frames = 0
+                        self.signals.status_update.emit("🎤 Recording...")
+                    
                     self.audio_stream.write(audio_data.tobytes())
                     
                 except Exception as e:
-                    pass
+                    print(f"Audio capture error: {e}")
                 
         except Exception as e:
             self.signals.status_update.emit(f"Error: {str(e)}")
