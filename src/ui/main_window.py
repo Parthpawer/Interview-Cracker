@@ -6,10 +6,11 @@ import threading
 import ctypes
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, 
-    QPushButton, QTextEdit, QTabWidget, QLineEdit, QScrollArea
+    QPushButton, QTextEdit, QTabWidget, QLineEdit, QScrollArea,
+    QSystemTrayIcon, QMenu, QApplication, QStyle
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QPoint, QRect, QTimer
-from PyQt6.QtGui import QTextCursor, QMouseEvent, QCursor
+from PyQt6.QtGui import QTextCursor, QMouseEvent, QCursor, QIcon
 from PIL import ImageGrab
 from pynput import keyboard
 
@@ -37,6 +38,11 @@ class MainWindow(QWidget):
         self.chunk_buffer = []
         self.last_ui_update = time.time()
         self.update_timer = None
+        self.transcription_buffer = []
+        self.batch_timer = QTimer(self)
+        self.batch_timer.setInterval(2000) # 4 seconds
+        self.batch_timer.setSingleShot(True)
+        self.batch_timer.timeout.connect(self._flush_transcription_buffer)
         
         self.setWindowTitle(Config.APP_TITLE)
         self.resize(Config.DEFAULT_WIDTH, Config.DEFAULT_HEIGHT)
@@ -66,6 +72,7 @@ class MainWindow(QWidget):
         
         # Setup UI
         self.setup_ui()
+        self.setup_system_tray()
         
         # Initialize Core Modules
         self.signals = TranscriptionSignals()
@@ -90,7 +97,7 @@ class MainWindow(QWidget):
     def load_styles(self):
         """Load QSS styles from file."""
         try:
-            style_path = resource_path('styles.qss')
+            style_path = resource_path(os.path.join('assets', 'styles.qss'))
             if os.path.exists(style_path):
                 with open(style_path, 'r') as f:
                     self.setStyleSheet(f.read())
@@ -189,11 +196,14 @@ class MainWindow(QWidget):
         api_layout = QVBoxLayout(api_tab)
         api_layout.setSpacing(10)
         
-        api_layout.addWidget(QLabel("Azure Speech API Key:"))
-        self.azure_key_input = QLineEdit()
-        self.azure_key_input.setPlaceholderText("Enter Azure API key")
-        self.azure_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.azure_key_input.setText(Config.SPEECH_KEY)
+        api_layout.addWidget(QLabel("Azure Speech API Keys (Comma Separated):"))
+        self.azure_key_input = QTextEdit()
+        self.azure_key_input.setPlaceholderText("Enter Azure API keys (e.g. key1,key2)...")
+        self.azure_key_input.setMaximumHeight(80)
+        
+        # We process it out of the Config as a comma separated string
+        azure_keys_str = ",".join(Config.SPEECH_KEYS) if Config.SPEECH_KEYS else ""
+        self.azure_key_input.setPlainText(azure_keys_str)
         api_layout.addWidget(self.azure_key_input)
         
         api_layout.addWidget(QLabel("Azure Region:"))
@@ -202,11 +212,13 @@ class MainWindow(QWidget):
         self.azure_region_input.setText(Config.SPEECH_REGION)
         api_layout.addWidget(self.azure_region_input)
         
-        api_layout.addWidget(QLabel("Gemini API Key:"))
-        self.gemini_key_input = QLineEdit()
-        self.gemini_key_input.setPlaceholderText("Enter Gemini API key")
-        self.gemini_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.gemini_key_input.setText(Config.GEMINI_API_KEY)
+        api_layout.addWidget(QLabel("Gemini API Keys (Comma Separated):"))
+        self.gemini_key_input = QTextEdit()
+        self.gemini_key_input.setPlaceholderText("Enter Gemini API keys (e.g. key1,key2)...")
+        self.gemini_key_input.setMaximumHeight(80)
+        
+        gemini_keys_str = ",".join(Config.GEMINI_API_KEYS) if Config.GEMINI_API_KEYS else ""
+        self.gemini_key_input.setPlainText(gemini_keys_str)
         api_layout.addWidget(self.gemini_key_input)
         
         save_keys_btn = QPushButton("💾 Save API Keys")
@@ -238,6 +250,8 @@ class MainWindow(QWidget):
         model_layout.addWidget(QLabel("Additional Instructions:"))
         self.system_prompt_input = QTextEdit()
         self.system_prompt_input.setPlaceholderText("Add extra instructions...")
+        if Config.SYSTEM_PROMPT:
+            self.system_prompt_input.setPlainText(Config.SYSTEM_PROMPT)
         self.system_prompt_input.setMaximumHeight(100)
         model_layout.addWidget(self.system_prompt_input)
         
@@ -275,6 +289,33 @@ class MainWindow(QWidget):
         self.screenshare_toggle.stateChanged.connect(self.toggle_screenshare)
         self.transcribe_button.clicked.connect(self.toggle_transcription)
 
+    def setup_system_tray(self):
+        """Initialize the system tray icon."""
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+        
+        tray_menu = QMenu()
+        
+        restore_action = tray_menu.addAction("Show/Restore Window")
+        restore_action.triggered.connect(self.restore_window)
+        
+        toggle_action = tray_menu.addAction("Toggle Transcription")
+        toggle_action.triggered.connect(self.toggle_transcription)
+        
+        tray_menu.addSeparator()
+        
+        quit_action = tray_menu.addAction("Quit")
+        quit_action.triggered.connect(QApplication.instance().quit)
+        
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self.tray_icon_activated)
+        self.tray_icon.show()
+
+    def tray_icon_activated(self, reason):
+        """Handle system tray icon clicks."""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.restore_window()
+
     def connect_signals(self):
         """Connect signals to slots."""
         self.signals.transcription_update.connect(self.update_transcription)
@@ -288,34 +329,41 @@ class MainWindow(QWidget):
 
     def save_api_keys(self):
         """Save API keys."""
-        azure_key = self.azure_key_input.text().strip()
+        azure_keys = self.azure_key_input.toPlainText().strip()
         azure_region = self.azure_region_input.text().strip()
-        gemini_key = self.gemini_key_input.text().strip()
+        gemini_keys = self.gemini_key_input.toPlainText().strip()
         
-        success, message = Config.save_env(azure_key, azure_region, gemini_key)
+        success, message = Config.save_env(speech_keys=azure_keys, speech_region=azure_region, gemini_keys=gemini_keys)
         self.signals.status_update.emit(message)
         
-        if gemini_key:
+        if gemini_keys:
+            # Update current session with the newly inputted keys parsing them as lists
+            self.gemini_client.api_keys = [k.strip() for k in gemini_keys.split(',')]
+            self.gemini_client.current_key_idx = 0
             self.gemini_client.initialize()
 
     def on_model_changed(self, model_name):
         """Handle model change."""
         self.gemini_client.update_model(model_name)
-        self.signals.status_update.emit(f"✅ Model: {model_name}")
+        Config.save_env(gemini_model=model_name)
+        self.signals.status_update.emit(f"✅ Model: {model_name} (saved)")
 
     def update_system_prompt(self):
         """Update system prompt."""
         instructions = self.system_prompt_input.toPlainText().strip()
         self.gemini_client.update_instructions(instructions)
-        self.signals.status_update.emit("✅ Instructions updated")
+        Config.save_env(system_prompt=instructions)
+        self.signals.status_update.emit("✅ Instructions updated and saved")
 
     def toggle_transcription(self):
         """Toggle transcription state."""
         if not self.audio_transcriber.is_transcribing:
-            api_key = self.azure_key_input.text() or Config.SPEECH_KEY
+            api_keys = self.azure_key_input.toPlainText()
+            if not api_keys and Config.SPEECH_KEYS:
+                 api_keys = ",".join(Config.SPEECH_KEYS)
             region = self.azure_region_input.text() or Config.SPEECH_REGION
             
-            if self.audio_transcriber.start(api_key, region):
+            if self.audio_transcriber.start(api_keys, region):
                 self.transcribe_button.setText("⏹ Stop Transcription")
                 self.transcribe_button.setProperty("class", "transcribe-btn-active")
                 self.transcribe_button.style().unpolish(self.transcribe_button)
@@ -333,7 +381,20 @@ class MainWindow(QWidget):
         if text.startswith("✅"):
             clean_text = text.replace("✅", "").strip()
             if clean_text:
-                self.send_to_gemini(clean_text)
+                self.transcription_buffer.append(clean_text)
+                
+                # Restart the 15-second timer
+                self.batch_timer.start()
+
+    def _flush_transcription_buffer(self):
+        """Send buffered transcription to Gemini."""
+        if not self.transcription_buffer:
+            return
+            
+        combined_text = " ".join(self.transcription_buffer)
+        self.transcription_buffer.clear()
+        
+        self.send_to_gemini(combined_text)
 
     def send_to_gemini(self, text):
         """Send text to Gemini."""
@@ -494,7 +555,7 @@ class MainWindow(QWidget):
         self.chat_display.append(f'''
             <div style="margin: 15px 0; clear: both;">
                 <div style="
-                    color: #f57173;
+                    color: #FFFFFF;
                     padding: 14px 18px;
                     border-radius: 12px;
                     word-wrap: break-word;
@@ -505,7 +566,7 @@ class MainWindow(QWidget):
                     display: block;
                 ">
                     <div style="margin-bottom: 6px; font-weight: 600; color: #ff9597; font-size: 12px;">🤖 AI Assistant</div>
-                    <div style="color: #f57173;"><span id="asst_content_placeholder"></span></div>
+                    <div style="color: #FFFFFF;"><span id="asst_content_placeholder"></span></div>
                 </div>
             </div>
             <br />
@@ -536,7 +597,7 @@ class MainWindow(QWidget):
         cursor.insertHtml(f'''
             <div style="margin: 12px 0; display: block;">
                 <div style="
-                    color: #f57173;
+                    color: #FFFFFF;
                     padding: 14px 18px;
                     border-radius: 12px;
                     word-wrap: break-word;
@@ -546,7 +607,7 @@ class MainWindow(QWidget):
                     border: 1px solid #5d1619;
                 ">
                     <div style="margin-bottom: 6px; font-weight: 600; color: #ff9597; font-size: 12px;">🤖 AI Assistant</div>
-                    <div style="color: #f57173;">{html_content}</div>
+                    <div style="color: #FFFFFF;">{html_content}</div>
                 </div>
                 <br>
             </div>
@@ -691,5 +752,8 @@ class MainWindow(QWidget):
         
         if hasattr(self, 'hotkey_listener'):
             self.hotkey_listener.stop()
+            
+        if hasattr(self, 'tray_icon'):
+            self.tray_icon.hide()
         
         event.accept()

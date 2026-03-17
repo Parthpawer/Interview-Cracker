@@ -5,3 +5,4 @@ ai_assistant_resize.py
 .env
 /build
 /dist
+__pycache__/

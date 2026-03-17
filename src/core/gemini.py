@@ -9,26 +9,36 @@ class GeminiClient:
     FIXED_SYSTEM_PROMPT = """You are a helpful AI assistant integrated into a desktop application. You help users with transcribed audio, screenshots, and general queries. Always provide concise, accurate, and helpful responses."""
 
     def __init__(self):
+        self.api_keys = Config.GEMINI_API_KEYS
+        self.current_key_idx = 0
         self.client = None
         self.chat = None
         self.current_model = Config.GEMINI_MODEL
-        self.additional_instructions = ""
+        self.additional_instructions = Config.SYSTEM_PROMPT
         self.initialize()
 
     def initialize(self):
-        """Initialize the Gemini client with API key."""
-        # Prefer env var (dynamic) over Config (static)
-        api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GOOGLE_API_KEY') or Config.GEMINI_API_KEY
-        if api_key:
-            try:
-                os.environ['GOOGLE_API_KEY'] = api_key
-                self.client = genai.Client()
-                self.create_chat()
-                return True
-            except Exception as e:
-                print(f"Gemini initialization error: {e}")
-                return False
-        return False
+        """Initialize the Gemini client with current API key."""
+        if not self.api_keys:
+            return False
+            
+        current_api_key = self.api_keys[self.current_key_idx]
+        try:
+            self.client = genai.Client(api_key=current_api_key)
+            self.create_chat()
+            return True
+        except Exception as e:
+            print(f"Gemini initialization error with key idx {self.current_key_idx}: {e}")
+            return False
+            
+    def _rotate_key(self):
+        """Move to the next available API key and reinitialize."""
+        if not self.api_keys or len(self.api_keys) <= 1:
+            return False
+            
+        self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
+        print(f"Rate limited or quota exceeded. Rotating to Gemini API Key #{self.current_key_idx + 1}")
+        return self.initialize()
 
     def get_full_system_instruction(self):
         """Combine fixed system prompt with additional instructions."""
@@ -66,23 +76,57 @@ class GeminiClient:
         return self.create_chat()
 
     def send_message_stream(self, text):
-        """Send text message and yield stream response."""
-        if not self.chat:
-            raise Exception("Gemini API not configured")
-            
-        return self.chat.send_message_stream(text)
+        """Send text message with fallback retry on rate limits."""
+        for attempt in range(len(self.api_keys) if self.api_keys else 1):
+            if not self.chat:
+                if not self.initialize():
+                    raise Exception("Gemini API not configured or keys exhausted")
+
+            try:
+                response = self.chat.send_message_stream(text)
+                for chunk in response:
+                    yield chunk
+                return
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "quota" in error_str or "exhausted" in error_str:
+                    rotated = self._rotate_key()
+                    if not rotated:
+                        raise e
+                    continue # Retry with new key
+                else:
+                    raise e
+                    
+        raise Exception("All Gemini API keys exhausted or rate-limited.")
 
     def send_screenshot_stream(self, image_bytes, prompt="What do you see in this screenshot? Please describe it and provide any relevant insights or help."):
-        """Send screenshot and yield stream response."""
-        if not self.chat:
-            raise Exception("Gemini API not configured")
-            
+        """Send screenshot with fallback retry on rate limits."""
         image_part = types.Part.from_bytes(
             data=image_bytes,
             mime_type='image/png'
         )
         
-        return self.chat.send_message_stream([
-            image_part,
-            prompt
-        ])
+        for attempt in range(len(self.api_keys) if self.api_keys else 1):
+            if not self.chat:
+                if not self.initialize():
+                    raise Exception("Gemini API not configured or keys exhausted")
+                    
+            try:
+                response = self.chat.send_message_stream([
+                    image_part,
+                    prompt
+                ])
+                for chunk in response:
+                    yield chunk
+                return
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "quota" in error_str or "exhausted" in error_str:
+                    rotated = self._rotate_key()
+                    if not rotated:
+                        raise e
+                    continue # Retry with new key
+                else:
+                    raise e
+                    
+        raise Exception("All Gemini API keys exhausted or rate-limited.")

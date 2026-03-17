@@ -18,8 +18,8 @@ def markdown_to_html(text):
     """Convert markdown text to HTML with custom theme colors."""
     html = markdown.markdown(text, extensions=['extra', 'nl2br', 'sane_lists', 'fenced_code'])
     html = html.replace('<code>', '<code style="background-color: #2d0708; color: #ffb3b5; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; font-size: 0.9em; border: 1px solid #5d1619;">')
-    html = html.replace('<pre>', '<pre style="background-color: #2d0708; color: #f57173; padding: 16px; border-radius: 8px; overflow-x: auto; border: 1px solid #5d1619; margin: 10px 0;">')
-    html = html.replace('<pre><code>', '<pre><code style="background-color: transparent; color: #f57173; padding: 0;">')
+    html = html.replace('<pre>', '<pre style="background-color: #2b2b2b; color: #FFFFFF; padding: 16px; border-radius: 8px; overflow-x: auto; border: 1px solid #3d3d3d; margin: 10px 0;">')
+    html = html.replace('<pre><code>', '<pre><code style="background-color: transparent; color: #FFFFFF; padding: 0;">')
     return html
 
 def resample_audio(audio_data, orig_rate, target_rate=16000):

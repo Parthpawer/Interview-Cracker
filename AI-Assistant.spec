@@ -9,6 +9,18 @@ speech_sdk_path = os.path.dirname(azure.cognitiveservices.speech.__file__)
 
 block_cipher = None
 
+# Define datas dynamically to prevent NoneType unpacking errors
+dynamic_datas = [
+    # All other files in the SDK folder
+    (speech_sdk_path, "azure/cognitiveservices/speech"),
+]
+
+if os.path.exists('.env'):
+    dynamic_datas.append(('.env', '.'))
+
+if os.path.exists('assets/styles.qss'):
+    dynamic_datas.append(('assets/styles.qss', 'assets'))
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -16,14 +28,7 @@ a = Analysis(
         # All DLLs required by azure-cognitiveservices-speech
         (os.path.join(speech_sdk_path, "*.dll"), "azure/cognitiveservices/speech"),
     ],
-    datas=[
-        # All other files in the SDK folder
-        (speech_sdk_path, "azure/cognitiveservices/speech"),
-        # Include your .env file for API credentials
-        ('.env', '.') if os.path.exists('.env') else None,
-        # Include styles
-        ('styles.qss', '.'),
-    ],
+    datas=dynamic_datas,
     hiddenimports=[
         'azure.cognitiveservices.speech',
         'azure.cognitiveservices.speech.audio',
@@ -61,9 +66,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-
-# Remove None values from datas if .env doesn't exist
-a.datas = [d for d in a.datas if d is not None]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

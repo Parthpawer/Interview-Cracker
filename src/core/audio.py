@@ -16,18 +16,30 @@ class AudioTranscriber:
         self.audio_stream = None
         self.speech_recognizer = None
 
-    def start(self, api_key, region):
+    def start(self, api_keys, region):
         """Start transcription."""
-        if not api_key or not region:
+        if not api_keys or not region:
             self.signals.status_update.emit("Error: Set Azure API key and region in Settings")
             return False
+
+        # Parse string if necessary, though it should be a list based on new Config
+        if isinstance(api_keys, str):
+            api_keys = [k.strip() for k in api_keys.split(',')]
+            
+        self.api_keys = [k for k in api_keys if k]
+        if not self.api_keys:
+             self.signals.status_update.emit("Error: No valid Azure API keys found")
+             return False
+             
+        self.current_key_idx = 0
+        self.switch_key_requested = False
 
         self.is_transcribing = True
         self.signals.status_update.emit("Status: Starting transcription...")
 
         self.transcription_thread = threading.Thread(
             target=self._transcription_worker,
-            args=(api_key, region),
+            args=(region,),
             daemon=True
         )
         self.transcription_thread.start()
@@ -42,36 +54,54 @@ class AudioTranscriber:
             except:
                 pass
 
-    def _transcription_worker(self, api_key, region):
+    def _transcription_worker(self, region):
         """Worker thread for audio capture and transcription."""
         p = None
         stream = None
         
-        try:
-            speech_config = speechsdk.SpeechConfig(subscription=api_key, region=region)
-            speech_config.speech_recognition_language = "en-US"
+        while self.is_transcribing:
+            self.switch_key_requested = False
+            current_api_key = self.api_keys[self.current_key_idx]
             
-            audio_format = AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
-            self.audio_stream = PushAudioInputStream(stream_format=audio_format)
-            audio_config = speechsdk.audio.AudioConfig(stream=self.audio_stream)
-            
-            self.speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
-            
-            def recognized_cb(evt):
-                if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                    self.signals.transcription_update.emit(f"✅ {evt.result.text}")
-            
-            def canceled_cb(evt):
-                error_msg = f"Recognition canceled: {evt.result.cancellation_details.reason}"
-                if evt.result.cancellation_details.error_details:
-                    error_msg += f" - {evt.result.cancellation_details.error_details}"
-                self.signals.status_update.emit(f"Error: {error_msg}")
+            try:
+                speech_config = speechsdk.SpeechConfig(subscription=current_api_key, region=region)
+                speech_config.speech_recognition_language = "en-US"
+                
+                audio_format = AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
+                self.audio_stream = PushAudioInputStream(stream_format=audio_format)
+                audio_config = speechsdk.audio.AudioConfig(stream=self.audio_stream)
+                
+                self.speech_recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+                
+                def recognized_cb(evt):
+                    if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                        self.signals.transcription_update.emit(f"✅ {evt.result.text}")
+                
+                def canceled_cb(evt):
+                    error_msg = f"Recognition canceled: {evt.result.cancellation_details.reason}"
+                    if evt.result.cancellation_details.error_details:
+                        error_details = evt.result.cancellation_details.error_details.lower()
+                        error_msg += f" - {evt.result.cancellation_details.error_details}"
+                        
+                        if "429" in error_details or "quota" in error_details or "too many requests" in error_details:
+                            if len(self.api_keys) > 1:
+                                self.switch_key_requested = True
+                                self.current_key_idx = (self.current_key_idx + 1) % len(self.api_keys)
+                                self.signals.status_update.emit(f"Azure Rate Limit. Rotating to Key #{self.current_key_idx + 1}...")
+                                return # Don't stop transcribing overall, just fall through
+                                
+                    self.signals.status_update.emit(f"Error: {error_msg}")
+                    if not self.switch_key_requested:
+                        self.is_transcribing = False
+                
+                self.speech_recognizer.recognized.connect(recognized_cb)
+                self.speech_recognizer.canceled.connect(canceled_cb)
+                
+                self.speech_recognizer.start_continuous_recognition()
+            except Exception as e:
+                self.signals.status_update.emit(f"Azure initialization error: {str(e)}")
                 self.is_transcribing = False
-            
-            self.speech_recognizer.recognized.connect(recognized_cb)
-            self.speech_recognizer.canceled.connect(canceled_cb)
-            
-            self.speech_recognizer.start_continuous_recognition()
+                break
             
             p = pyaudio.PyAudio()
             wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
@@ -105,7 +135,7 @@ class AudioTranscriber:
             
             self.signals.status_update.emit("Status: Recording and transcribing...")
             
-            while self.is_transcribing:
+            while self.is_transcribing and not self.switch_key_requested:
                 try:
                     data = stream.read(CHUNK, exception_on_overflow=False)
                     audio_data = np.frombuffer(data, dtype=np.int16)
@@ -120,11 +150,8 @@ class AudioTranscriber:
                     
                 except Exception as e:
                     pass
-                
-        except Exception as e:
-            self.signals.status_update.emit(f"Error: {str(e)}")
-            
-        finally:
+                    
+            # Cleanup for inner loop (rebuilding streams if rotated)
             try:
                 if stream:
                     stream.stop_stream()
