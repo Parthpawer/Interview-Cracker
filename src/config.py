@@ -1,8 +1,19 @@
 import os
+import sys
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Compute absolute path for config based on context
+if getattr(sys, 'frozen', False):
+    # App is running as a PyInstaller executable
+    base_path = os.path.dirname(sys.executable)
+else:
+    # App is running directly as Python script
+    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+env_path = os.path.join(base_path, '.env')
+
+# Load environment variables from exactly matching .env file
+load_dotenv(env_path)
 
 class Config:
     """Application configuration and environment variables."""
@@ -27,8 +38,14 @@ class Config:
     
     @staticmethod
     def save_env(speech_keys=None, speech_region=None, gemini_keys=None, gemini_model=None, system_prompt=None):
-        """Save updated credentials and settings to .env file."""
-        env_path = os.path.join(os.getcwd(), '.env')
+        """Save updated credentials and settings to precisely located .env file."""
+        import os
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            
+        env_path = os.path.join(base_dir, '.env')
         
         # Update current session
         if speech_keys:

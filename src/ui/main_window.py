@@ -30,6 +30,9 @@ class TranscriptionSignals(QObject):
     add_screenshot_message = pyqtSignal()
     add_assistant_message_start = pyqtSignal()
     add_assistant_chunk = pyqtSignal(str)
+    toggle_transcription_signal = pyqtSignal()
+    toggle_privacy_signal = pyqtSignal()
+    toggle_visibility_signal = pyqtSignal()
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -65,7 +68,7 @@ class MainWindow(QWidget):
         self.border_width = 8
         
         self.setMouseTracking(True)
-        self.setWindowOpacity(0.95)
+        self.setWindowOpacity(0.85)
         
         # Load Styles
         self.load_styles()
@@ -82,7 +85,6 @@ class MainWindow(QWidget):
         self.gemini_client = GeminiClient()
         
         # Windows API
-        self.hwnd = None
         self.user32 = ctypes.windll.user32
         self.WDA_NONE = 0x00
         self.WDA_EXCLUDEFROMCAPTURE = 0x11
@@ -92,7 +94,6 @@ class MainWindow(QWidget):
         self.current_screenshot_bytes = None
         
         self.setup_hotkey()
-        self.showEvent = self._on_show
 
     def load_styles(self):
         """Load QSS styles from file."""
@@ -167,7 +168,7 @@ class MainWindow(QWidget):
         self.transcribe_button = QPushButton("🎤 Start Transcription")
         self.transcribe_button.setProperty("class", "transcribe-btn")
         
-        self.status_label = QLabel("Ready | Press Alt+X for screenshot")
+        self.status_label = QLabel("Ready | Alt+Z: Privacy | Alt+A: Show/Hide | Alt+X: Snip | Alt+M: Mic")
         self.status_label.setStyleSheet("color: #a0a0a0; font-size: 12px;")
         
         control_layout.addWidget(self.transcribe_button)
@@ -326,6 +327,9 @@ class MainWindow(QWidget):
         self.signals.add_screenshot_message.connect(self.add_screenshot_message_to_chat)
         self.signals.add_assistant_message_start.connect(self.start_assistant_message)
         self.signals.add_assistant_chunk.connect(self.add_assistant_chunk)
+        self.signals.toggle_transcription_signal.connect(self.toggle_transcription)
+        self.signals.toggle_privacy_signal.connect(self.toggle_privacy)
+        self.signals.toggle_visibility_signal.connect(self.toggle_visibility)
 
     def save_api_keys(self):
         """Save API keys."""
@@ -374,7 +378,7 @@ class MainWindow(QWidget):
             self.transcribe_button.setProperty("class", "transcribe-btn")
             self.transcribe_button.style().unpolish(self.transcribe_button)
             self.transcribe_button.style().polish(self.transcribe_button)
-            self.signals.status_update.emit("Status: Stopped | Press Alt+X for screenshot")
+            self.signals.status_update.emit("Status: Stopped | Alt+Z: Privacy | Alt+A: Show/Hide | Alt+X: Snip | Alt+M: Mic")
 
     def update_transcription(self, text):
         """Handle transcribed text."""
@@ -425,9 +429,21 @@ class MainWindow(QWidget):
         """Setup global hotkey."""
         def on_screenshot_hotkey():
             self.signals.screenshot_signal.emit()
+            
+        def on_mute_hotkey():
+            self.signals.toggle_transcription_signal.emit()
+            
+        def on_privacy_hotkey():
+            self.signals.toggle_privacy_signal.emit()
+            
+        def on_visibility_hotkey():
+            self.signals.toggle_visibility_signal.emit()
         
         self.hotkey_listener = keyboard.GlobalHotKeys({
-            '<alt>+x': on_screenshot_hotkey
+            '<alt>+x': on_screenshot_hotkey,
+            '<alt>+m': on_mute_hotkey,
+            '<alt>+z': on_privacy_hotkey,
+            '<alt>+a': on_visibility_hotkey
         })
         self.hotkey_listener.start()
 
@@ -483,24 +499,29 @@ class MainWindow(QWidget):
 
     def restore_window(self):
         """Restore window to front."""
+        self.showNormal()
         self.show()
         self.raise_()
         self.activateWindow()
         
-        if sys.platform == 'win32' and self.hwnd:
+        if sys.platform == 'win32':
+            hwnd = int(self.winId())
             HWND_TOPMOST = -1
             HWND_NOTOPMOST = -2
             SWP_NOMOVE = 0x0002
             SWP_NOSIZE = 0x0001
             SWP_SHOWWINDOW = 0x0040
             
-            self.user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
-            self.user32.SetWindowPos(self.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            self.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            self.user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
         
         flags = self.windowFlags()
         if not (flags & Qt.WindowType.WindowStaysOnTopHint):
             self.setWindowFlags(flags | Qt.WindowType.WindowStaysOnTopHint)
             self.show()
+            if self.screenshare_toggle.isChecked() and sys.platform == 'win32':
+                QApplication.processEvents()
+                self.user32.SetWindowDisplayAffinity(int(self.winId()), self.WDA_EXCLUDEFROMCAPTURE)
 
     # --- UI Update Methods (Chat Bubbles) ---
     
@@ -723,28 +744,42 @@ class MainWindow(QWidget):
         if geo.width() >= self.minimumWidth() and geo.height() >= self.minimumHeight():
             self.setGeometry(geo)
 
-    def _on_show(self, event):
-        self.hwnd = self.user32.FindWindowW(None, self.windowTitle())
-
     def toggle_taskbar(self):
         if self.taskbar_toggle.isChecked():
             self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-            self.show()
         else:
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-            self.show()
+            
+        self.show()
+        
+        if self.screenshare_toggle.isChecked() and sys.platform == 'win32':
+            QApplication.processEvents()
+            self.user32.SetWindowDisplayAffinity(int(self.winId()), self.WDA_EXCLUDEFROMCAPTURE)
+
+    def toggle_privacy(self):
+        """Toggle true hardware privacy options via hotkey."""
+        new_state = not (self.taskbar_toggle.isChecked() and self.screenshare_toggle.isChecked())
+        self.taskbar_toggle.setChecked(new_state)
+        self.screenshare_toggle.setChecked(new_state)
+
+    def toggle_visibility(self):
+        """Toggle the visibility of the window without killing the process."""
+        if self.isVisible() and not self.isMinimized():
+            self.hide()
+        else:
+            self.restore_window()
 
     def toggle_screenshare(self):
-        if not self.hwnd:
-            self.hwnd = self.user32.FindWindowW(None, self.windowTitle())
-
-        if self.hwnd:
-            if self.screenshare_toggle.isChecked():
-                self.user32.SetWindowDisplayAffinity(self.hwnd, self.WDA_EXCLUDEFROMCAPTURE)
-                self.model_selector.set_screen_share_hidden(True)
-            else:
-                self.user32.SetWindowDisplayAffinity(self.hwnd, self.WDA_NONE)
-                self.model_selector.set_screen_share_hidden(False)
+        if sys.platform != 'win32':
+            return
+            
+        hwnd = int(self.winId())
+        if self.screenshare_toggle.isChecked():
+            self.user32.SetWindowDisplayAffinity(hwnd, self.WDA_EXCLUDEFROMCAPTURE)
+            self.model_selector.set_screen_share_hidden(True)
+        else:
+            self.user32.SetWindowDisplayAffinity(hwnd, self.WDA_NONE)
+            self.model_selector.set_screen_share_hidden(False)
 
     def closeEvent(self, event):
         if self.audio_transcriber.is_transcribing:
