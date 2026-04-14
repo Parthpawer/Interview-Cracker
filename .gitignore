@@ -6,3 +6,4 @@ ai_assistant_resize.py
 /build
 /dist
 __pycache__/
+/venv

@@ -64,11 +64,10 @@ The final executable will be in `dist/AI-Assistant.exe`.
 
 | Action | Description |
 |--------|--------------|
-| **Toggle Transcription (Global)** | Start or stop the mic securely over ANY window globally with `Alt + M` |
-| **Send Context Snapshot** | Instantly snapshot your desktop to Gemini for analysis with `Alt + X` |
-| **Stealth Mode** | Completely hide/restore the app visually from the desktop with `Alt + A` |
-| **Hardware Privacy Check** | Toggle Taskbar and Screen-Sharing hardware protections with `Alt + Z` |
-| **Settings UI** | Configure API keys natively routing securely to a local `.env` file |
+| **Start/Stop Transcription** | Toggle real-time audio transcription |
+| **Send Screenshot** | Use hotkey `Alt+X` to capture and send a screenshot |
+| **Chat Interaction** | View AI responses and transcription history |
+| **Settings** | Update API keys, model preferences, and app configuration |
 
 Run directly from the source:
 
@@ -85,10 +84,10 @@ python main.py
 | `main.py` | Entry point of the application |
 | `src/` | Source code directory |
 | `src/core/` | Business logic (Audio, Gemini) |
-| `src/ui/` | User Interface logic and styling routines |
-| `assets/` | External stylesheets, icons, and dynamic datas |
-| `tests/` | Developer scripts and debug testing handlers |
-| `AI-Assistant.spec` | Customized PyInstaller AST asset compiler |
+| `src/ui/` | User Interface code |
+| `src/utils/` | Helper functions |
+| `styles.qss` | External stylesheet |
+| `AI-Assistant.spec` | PyInstaller config |
 | `.github/workflows/` | CI/CD configurations |
 
 ---

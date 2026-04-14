@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QSystemTrayIcon, QMenu, QApplication, QStyle
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QObject, QPoint, QRect, QTimer
-from PyQt6.QtGui import QTextCursor, QMouseEvent, QCursor, QIcon
+from PyQt6.QtGui import QTextCursor, QMouseEvent, QCursor, QIcon, QShortcut, QKeySequence
 from PIL import ImageGrab
 from pynput import keyboard
 
@@ -30,8 +30,6 @@ class TranscriptionSignals(QObject):
     add_screenshot_message = pyqtSignal()
     add_assistant_message_start = pyqtSignal()
     add_assistant_chunk = pyqtSignal(str)
-    toggle_transcription_signal = pyqtSignal()
-    toggle_privacy_signal = pyqtSignal()
     toggle_visibility_signal = pyqtSignal()
 
 class MainWindow(QWidget):
@@ -41,9 +39,9 @@ class MainWindow(QWidget):
         self.chunk_buffer = []
         self.last_ui_update = time.time()
         self.update_timer = None
-        self.transcription_buffer = []
+        self.buffer_text = ""
         self.batch_timer = QTimer(self)
-        self.batch_timer.setInterval(2000) # 4 seconds
+        self.batch_timer.setInterval(2000) # 2 seconds silence buffer
         self.batch_timer.setSingleShot(True)
         self.batch_timer.timeout.connect(self._flush_transcription_buffer)
         
@@ -68,7 +66,7 @@ class MainWindow(QWidget):
         self.border_width = 8
         
         self.setMouseTracking(True)
-        self.setWindowOpacity(0.85)
+        self.setWindowOpacity(0.95)
         
         # Load Styles
         self.load_styles()
@@ -85,6 +83,7 @@ class MainWindow(QWidget):
         self.gemini_client = GeminiClient()
         
         # Windows API
+        self.hwnd = None
         self.user32 = ctypes.windll.user32
         self.WDA_NONE = 0x00
         self.WDA_EXCLUDEFROMCAPTURE = 0x11
@@ -92,8 +91,14 @@ class MainWindow(QWidget):
         # State
         self.current_assistant_message = ""
         self.current_screenshot_bytes = None
+        self.ai_mode_on = False
+        self.is_hidden = False
+        
+        self.toggle_shortcut = QShortcut(QKeySequence("Alt+W"), self)
+        self.toggle_shortcut.activated.connect(self.toggle_visibility)
         
         self.setup_hotkey()
+        self.showEvent = self._on_show
 
     def load_styles(self):
         """Load QSS styles from file."""
@@ -168,10 +173,17 @@ class MainWindow(QWidget):
         self.transcribe_button = QPushButton("🎤 Start Transcription")
         self.transcribe_button.setProperty("class", "transcribe-btn")
         
-        self.status_label = QLabel("Ready | Alt+Z: Privacy | Alt+A: Show/Hide | Alt+X: Snip | Alt+M: Mic")
+        self.ai_mode_button = QPushButton("AI Mode: OFF ❌")
+        self.ai_mode_button.setProperty("class", "ai-mode-btn")
+        self.ai_mode_button.clicked.connect(self.toggle_ai_mode)
+        self.ai_mode_button.setFixedHeight(36)
+        self.ai_mode_button.setFixedWidth(160)
+        
+        self.status_label = QLabel("Ready | Press Alt+X for screenshot")
         self.status_label.setStyleSheet("color: #a0a0a0; font-size: 12px;")
         
         control_layout.addWidget(self.transcribe_button)
+        control_layout.addWidget(self.ai_mode_button)
         control_layout.addWidget(self.status_label)
         control_layout.addStretch()
         
@@ -226,6 +238,10 @@ class MainWindow(QWidget):
         save_keys_btn.clicked.connect(self.save_api_keys)
         api_layout.addWidget(save_keys_btn)
         
+        test_keys_btn = QPushButton("🧪 Test Gemini Keys")
+        test_keys_btn.clicked.connect(self.test_gemini_keys)
+        api_layout.addWidget(test_keys_btn)
+        
         api_layout.addStretch()
         
         # Tab 2: Model & Prompt
@@ -236,12 +252,10 @@ class MainWindow(QWidget):
         model_layout.addWidget(QLabel("Gemini Model:"))
         self.model_selector = CustomComboBox()
         self.model_selector.addItems([
-            "gemini-2.0-flash-exp",
+            "gemini-2.0-flash",
             "gemini-2.5-flash",
             "gemini-2.5-pro",
             "gemini-2.0-flash-lite",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
             "gemini-1.5-flash-8b"
         ])
         self.model_selector.setCurrentText(Config.GEMINI_MODEL)
@@ -323,13 +337,11 @@ class MainWindow(QWidget):
         self.signals.status_update.connect(self.update_status)
         self.signals.screenshot_signal.connect(self.take_screenshot_safe)
         self.signals.restore_window_signal.connect(self.restore_window)
+        self.signals.toggle_visibility_signal.connect(self.toggle_visibility)
         self.signals.add_user_message.connect(self.add_user_message_to_chat)
         self.signals.add_screenshot_message.connect(self.add_screenshot_message_to_chat)
         self.signals.add_assistant_message_start.connect(self.start_assistant_message)
         self.signals.add_assistant_chunk.connect(self.add_assistant_chunk)
-        self.signals.toggle_transcription_signal.connect(self.toggle_transcription)
-        self.signals.toggle_privacy_signal.connect(self.toggle_privacy)
-        self.signals.toggle_visibility_signal.connect(self.toggle_visibility)
 
     def save_api_keys(self):
         """Save API keys."""
@@ -343,8 +355,18 @@ class MainWindow(QWidget):
         if gemini_keys:
             # Update current session with the newly inputted keys parsing them as lists
             self.gemini_client.api_keys = [k.strip() for k in gemini_keys.split(',')]
-            self.gemini_client.current_key_idx = 0
-            self.gemini_client.initialize()
+            self.gemini_client.current_key_index = 0
+            self.gemini_client._initialize_client()
+
+    def toggle_ai_mode(self):
+        """Toggle Gemini AI mode on/off."""
+        self.ai_mode_on = not self.ai_mode_on
+        if self.ai_mode_on:
+            self.ai_mode_button.setText("AI Mode: ON 🤖")
+            self.signals.status_update.emit("AI Mode enabled")
+        else:
+            self.ai_mode_button.setText("AI Mode: OFF ❌")
+            self.signals.status_update.emit("AI Mode disabled")
 
     def on_model_changed(self, model_name):
         """Handle model change."""
@@ -358,7 +380,50 @@ class MainWindow(QWidget):
         self.gemini_client.update_instructions(instructions)
         Config.save_env(system_prompt=instructions)
         self.signals.status_update.emit("✅ Instructions updated and saved")
-
+    def test_gemini_keys(self):
+        """Test Gemini API keys."""
+        gemini_keys = self.gemini_key_input.toPlainText().strip()
+        if not gemini_keys:
+            self.signals.status_update.emit("❌ No Gemini API keys provided")
+            return
+        
+        # Temporarily update keys for testing
+        original_keys = self.gemini_client.api_keys
+        self.gemini_client.api_keys = [k.strip() for k in gemini_keys.split(',') if k.strip()]
+        self.gemini_client.current_key_index = 0
+        self.gemini_client.client = None
+        self.gemini_client.chat = None
+        
+        def test_worker():
+            try:
+                # Try a simple test message
+                response = self.call_gemini_with_keys("Hello, test message.")
+                # Consume the response
+                chunks = list(response)
+                self.signals.status_update.emit("✅ Gemini API keys are working!")
+            except Exception as e:
+                error_msg = str(e)
+                # Use specific error messages from optimized Gemini client
+                if "Gemini API not configured" in error_msg:
+                    display_msg = "❌ Invalid or empty API keys"
+                elif "quota exceeded" in error_msg.lower():
+                    display_msg = "❌ API quota exceeded. Please wait a few minutes and try again."
+                elif "temporarily unavailable" in error_msg.lower():
+                    display_msg = "❌ Gemini service temporarily unavailable. Please try again shortly."
+                elif "model" in error_msg.lower() and "not found" in error_msg.lower():
+                    display_msg = f"❌ {error_msg}"
+                else:
+                    display_msg = f"❌ API test failed: {error_msg}"
+                
+                self.signals.status_update.emit(display_msg)
+            finally:
+                # Restore original keys
+                self.gemini_client.api_keys = original_keys
+                self.gemini_client.current_key_index = 0
+                self.gemini_client.client = None
+                self.gemini_client.chat = None
+        
+        threading.Thread(target=test_worker, daemon=True).start()
     def toggle_transcription(self):
         """Toggle transcription state."""
         if not self.audio_transcriber.is_transcribing:
@@ -374,78 +439,137 @@ class MainWindow(QWidget):
                 self.transcribe_button.style().polish(self.transcribe_button)
         else:
             self.audio_transcriber.stop()
+            self.batch_timer.stop()
+
+            buffered_text = self.buffer_text.strip()
+            self.buffer_text = ""
+
+            if self.ai_mode_on and buffered_text:
+                self.signals.status_update.emit("🤖 Thinking...")
+                self.send_to_gemini(buffered_text)
+            else:
+                self.signals.status_update.emit("Status: Stopped | Press Alt+X for screenshot")
+
             self.transcribe_button.setText("🎤 Start Transcription")
             self.transcribe_button.setProperty("class", "transcribe-btn")
             self.transcribe_button.style().unpolish(self.transcribe_button)
             self.transcribe_button.style().polish(self.transcribe_button)
-            self.signals.status_update.emit("Status: Stopped | Alt+Z: Privacy | Alt+A: Show/Hide | Alt+X: Snip | Alt+M: Mic")
 
     def update_transcription(self, text):
         """Handle transcribed text."""
         if text.startswith("✅"):
             clean_text = text.replace("✅", "").strip()
             if clean_text:
-                self.transcription_buffer.append(clean_text)
-                
-                # Restart the 15-second timer
+                if self.buffer_text:
+                    self.buffer_text += " " + clean_text
+                else:
+                    self.buffer_text = clean_text
                 self.batch_timer.start()
+                self.signals.status_update.emit("Status: Listening... buffering speech...")
 
     def _flush_transcription_buffer(self):
-        """Send buffered transcription to Gemini."""
-        if not self.transcription_buffer:
+        """No-op flush during transcription to preserve stop-triggered behavior."""
+        if self.audio_transcriber.is_transcribing:
             return
-            
-        combined_text = " ".join(self.transcription_buffer)
-        self.transcription_buffer.clear()
-        
-        self.send_to_gemini(combined_text)
+
+        if not self.buffer_text:
+            return
+
+        text_to_send = self.buffer_text.strip()
+        self.buffer_text = ""
+
+        if not self.ai_mode_on:
+            self.signals.status_update.emit("AI Mode is OFF — transcription preserved only")
+            return
+
+        if len(text_to_send) <= 10 and "?" not in text_to_send:
+            self.signals.status_update.emit("Short phrase detected — continuing to buffer speech.")
+            return
+
+        self.send_to_gemini(text_to_send)
 
     def send_to_gemini(self, text):
-        """Send text to Gemini."""
-        if not self.gemini_client.chat:
+        """Send text to Gemini with background threading and fast response model."""
+        if not self.ai_mode_on:
+            self.signals.status_update.emit("AI Mode is OFF — Gemini will not process transcription")
+            return
+        if not self.gemini_client.api_keys:
             self.signals.status_update.emit("Error: Gemini API not configured")
             return
-        
+
+        trimmed_text = text.strip()[-300:]
+        self.signals.status_update.emit("🤖 Thinking...")
+
         def gemini_worker():
             try:
                 self.signals.add_user_message.emit(text)
                 self.signals.add_assistant_message_start.emit()
-                
-                response = self.gemini_client.send_message_stream(text)
+
+                response = self.call_gemini_with_keys(trimmed_text)
                 
                 for chunk in response:
                     if hasattr(chunk, 'text') and chunk.text:
                         self.signals.add_assistant_chunk.emit(chunk.text)
-                
+
                 if self.chunk_buffer:
                     QTimer.singleShot(0, self._render_assistant_message_safe)
-                
             except Exception as e:
-                self.signals.status_update.emit(f"Gemini error: {str(e)}")
-        
+                error_msg = str(e)
+                
+                # Use specific error messages from optimized Gemini client
+                if "Gemini API not configured" in error_msg:
+                    display_msg = "⚠️ Gemini API not configured. Please add API keys in Settings."
+                elif "quota exceeded" in error_msg.lower():
+                    display_msg = "⚠️ API quota exceeded. Please try again in a few minutes."
+                elif "temporarily unavailable" in error_msg.lower():
+                    display_msg = "⚠️ Gemini service temporarily unavailable. Please try again shortly."
+                elif "Unable to reach Gemini" in error_msg:
+                    display_msg = "⚠️ Unable to reach Gemini API. Please check your connection or try again later."
+                elif "model" in error_msg.lower() and "not found" in error_msg.lower():
+                    display_msg = f"⚠️ {error_msg}"
+                else:
+                    # Fallback to actual error message if available
+                    display_msg = error_msg if error_msg.startswith("⚠️") or error_msg.startswith("❌") else f"⚠️ {error_msg}"
+                
+                self.signals.status_update.emit(display_msg)
+                self.signals.add_assistant_chunk.emit(display_msg)
+                if self.chunk_buffer:
+                    QTimer.singleShot(0, self._render_assistant_message_safe)
+
         threading.Thread(target=gemini_worker, daemon=True).start()
+
+    def call_gemini_with_keys(self, text):
+        """Call Gemini using multiple API keys with round-robin and failover."""
+        if not self.gemini_client.api_keys:
+            raise Exception("Gemini API not configured")
+
+        model_name = self.gemini_client.current_model or Config.GEMINI_MODEL
+        return self.gemini_client.send_message_stream(text, model_name=model_name)
 
     def setup_hotkey(self):
         """Setup global hotkey."""
         def on_screenshot_hotkey():
             self.signals.screenshot_signal.emit()
-            
-        def on_mute_hotkey():
-            self.signals.toggle_transcription_signal.emit()
-            
-        def on_privacy_hotkey():
-            self.signals.toggle_privacy_signal.emit()
-            
-        def on_visibility_hotkey():
+
+        def on_toggle_visibility_hotkey():
             self.signals.toggle_visibility_signal.emit()
         
         self.hotkey_listener = keyboard.GlobalHotKeys({
             '<alt>+x': on_screenshot_hotkey,
-            '<alt>+m': on_mute_hotkey,
-            '<alt>+z': on_privacy_hotkey,
-            '<alt>+a': on_visibility_hotkey
+            '<alt>+w': on_toggle_visibility_hotkey
         })
         self.hotkey_listener.start()
+
+    def toggle_visibility(self):
+        """Toggle window visibility with Alt+W."""
+        if self.isVisible():
+            self.is_hidden = True
+            self.hide()
+        else:
+            self.is_hidden = False
+            self.show()
+            self.raise_()
+            self.activateWindow()
 
     def take_screenshot_safe(self):
         """Thread-safe screenshot handler."""
@@ -466,8 +590,11 @@ class MainWindow(QWidget):
             self.current_screenshot_bytes = img_byte_arr.getvalue()
             
             self.signals.add_screenshot_message.emit()
-            self.send_screenshot_to_gemini(self.current_screenshot_bytes)
-            self.signals.status_update.emit("Screenshot captured and sent to AI")
+            if self.ai_mode_on:
+                self.send_screenshot_to_gemini(self.current_screenshot_bytes)
+                self.signals.status_update.emit("Screenshot captured and sent to AI")
+            else:
+                self.signals.status_update.emit("Screenshot captured — AI Mode is OFF")
         except Exception as e:
             self.signals.status_update.emit(f"Screenshot error: {str(e)}")
         finally:
@@ -476,7 +603,10 @@ class MainWindow(QWidget):
 
     def send_screenshot_to_gemini(self, image_bytes):
         """Send screenshot to Gemini."""
-        if not self.gemini_client.chat:
+        if not self.ai_mode_on:
+            self.signals.status_update.emit("AI Mode is OFF — screenshot will not be sent to Gemini")
+            return
+        if not self.gemini_client.api_keys:
             self.signals.status_update.emit("Error: Gemini API not configured")
             return
         
@@ -493,35 +623,42 @@ class MainWindow(QWidget):
                     QTimer.singleShot(0, self._render_assistant_message_safe)
                 
             except Exception as e:
-                self.signals.status_update.emit(f"Gemini screenshot error: {str(e)}")
+                error_msg = str(e)
+                # Display specific error messages from optimized Gemini client
+                if "quota exceeded" in error_msg.lower():
+                    display_msg = "⚠️ API quota exceeded. Please try again in a few minutes."
+                elif "temporarily unavailable" in error_msg.lower():
+                    display_msg = "⚠️ Gemini service temporarily unavailable. Please try again shortly."
+                elif "Unable to reach" in error_msg:
+                    display_msg = "⚠️ Unable to reach Gemini API. Please check your connection or try again later."
+                else:
+                    display_msg = f"⚠️ {error_msg}" if not error_msg.startswith("⚠️") else error_msg
+                
+                self.signals.status_update.emit(display_msg)
         
         threading.Thread(target=gemini_screenshot_worker, daemon=True).start()
 
     def restore_window(self):
         """Restore window to front."""
-        self.showNormal()
+        self.is_hidden = False
         self.show()
         self.raise_()
         self.activateWindow()
         
-        if sys.platform == 'win32':
-            hwnd = int(self.winId())
+        if sys.platform == 'win32' and self.hwnd:
             HWND_TOPMOST = -1
             HWND_NOTOPMOST = -2
             SWP_NOMOVE = 0x0002
             SWP_NOSIZE = 0x0001
             SWP_SHOWWINDOW = 0x0040
             
-            self.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
-            self.user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            self.user32.SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+            self.user32.SetWindowPos(self.hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
         
         flags = self.windowFlags()
         if not (flags & Qt.WindowType.WindowStaysOnTopHint):
             self.setWindowFlags(flags | Qt.WindowType.WindowStaysOnTopHint)
             self.show()
-            if self.screenshare_toggle.isChecked() and sys.platform == 'win32':
-                QApplication.processEvents()
-                self.user32.SetWindowDisplayAffinity(int(self.winId()), self.WDA_EXCLUDEFROMCAPTURE)
 
     # --- UI Update Methods (Chat Bubbles) ---
     
@@ -744,42 +881,28 @@ class MainWindow(QWidget):
         if geo.width() >= self.minimumWidth() and geo.height() >= self.minimumHeight():
             self.setGeometry(geo)
 
+    def _on_show(self, event):
+        self.hwnd = self.user32.FindWindowW(None, self.windowTitle())
+
     def toggle_taskbar(self):
         if self.taskbar_toggle.isChecked():
             self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+            self.show()
         else:
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-            
-        self.show()
-        
-        if self.screenshare_toggle.isChecked() and sys.platform == 'win32':
-            QApplication.processEvents()
-            self.user32.SetWindowDisplayAffinity(int(self.winId()), self.WDA_EXCLUDEFROMCAPTURE)
-
-    def toggle_privacy(self):
-        """Toggle true hardware privacy options via hotkey."""
-        new_state = not (self.taskbar_toggle.isChecked() and self.screenshare_toggle.isChecked())
-        self.taskbar_toggle.setChecked(new_state)
-        self.screenshare_toggle.setChecked(new_state)
-
-    def toggle_visibility(self):
-        """Toggle the visibility of the window without killing the process."""
-        if self.isVisible() and not self.isMinimized():
-            self.hide()
-        else:
-            self.restore_window()
+            self.show()
 
     def toggle_screenshare(self):
-        if sys.platform != 'win32':
-            return
-            
-        hwnd = int(self.winId())
-        if self.screenshare_toggle.isChecked():
-            self.user32.SetWindowDisplayAffinity(hwnd, self.WDA_EXCLUDEFROMCAPTURE)
-            self.model_selector.set_screen_share_hidden(True)
-        else:
-            self.user32.SetWindowDisplayAffinity(hwnd, self.WDA_NONE)
-            self.model_selector.set_screen_share_hidden(False)
+        if not self.hwnd:
+            self.hwnd = self.user32.FindWindowW(None, self.windowTitle())
+
+        if self.hwnd:
+            if self.screenshare_toggle.isChecked():
+                self.user32.SetWindowDisplayAffinity(self.hwnd, self.WDA_EXCLUDEFROMCAPTURE)
+                self.model_selector.set_screen_share_hidden(True)
+            else:
+                self.user32.SetWindowDisplayAffinity(self.hwnd, self.WDA_NONE)
+                self.model_selector.set_screen_share_hidden(False)
 
     def closeEvent(self, event):
         if self.audio_transcriber.is_transcribing:

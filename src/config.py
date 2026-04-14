@@ -1,19 +1,8 @@
 import os
-import sys
 from dotenv import load_dotenv
 
-# Compute absolute path for config based on context
-if getattr(sys, 'frozen', False):
-    # App is running as a PyInstaller executable
-    base_path = os.path.dirname(sys.executable)
-else:
-    # App is running directly as Python script
-    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-env_path = os.path.join(base_path, '.env')
-
-# Load environment variables from exactly matching .env file
-load_dotenv(env_path)
+# Load environment variables from .env file
+load_dotenv()
 
 class Config:
     """Application configuration and environment variables."""
@@ -26,8 +15,9 @@ class Config:
     # Google Gemini
     GEMINI_KEY_RAW = os.getenv('GEMINI_API_KEYS', '') or os.getenv('GEMINI_API_KEY', '') or os.getenv('GOOGLE_API_KEY', '')
     GEMINI_API_KEYS = [k.strip() for k in GEMINI_KEY_RAW.split(',')] if GEMINI_KEY_RAW else []
-    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash-exp')
+    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
     SYSTEM_PROMPT = os.getenv('SYSTEM_PROMPT', '').replace('\\n', '\n')
+    GEMINI_SAFE_MODE = os.getenv('GEMINI_SAFE_MODE', 'false').lower() == 'true'  # Single key only, no rotation
     
     # App Settings
     APP_TITLE = "AI Assistant with Live Transcription"
@@ -38,14 +28,8 @@ class Config:
     
     @staticmethod
     def save_env(speech_keys=None, speech_region=None, gemini_keys=None, gemini_model=None, system_prompt=None):
-        """Save updated credentials and settings to precisely located .env file."""
-        import os
-        if getattr(sys, 'frozen', False):
-            base_dir = os.path.dirname(sys.executable)
-        else:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            
-        env_path = os.path.join(base_dir, '.env')
+        """Save updated credentials and settings to .env file."""
+        env_path = os.path.join(os.getcwd(), '.env')
         
         # Update current session
         if speech_keys:
