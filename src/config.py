@@ -1,34 +1,43 @@
 import os
+import logging
+from typing import List
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 class Config:
     """Application configuration and environment variables."""
     
     # Azure Speech
     SPEECH_KEY_RAW = os.getenv('SPEECH_KEYS', '') or os.getenv('SPEECH_KEY', '')
-    SPEECH_KEYS = [k.strip() for k in SPEECH_KEY_RAW.split(',')] if SPEECH_KEY_RAW else []
-    SPEECH_REGION = os.getenv('SPEECH_REGION', '')
+    SPEECH_KEYS: List[str] = [k.strip() for k in SPEECH_KEY_RAW.split(',')] if SPEECH_KEY_RAW else []
+    SPEECH_REGION: str = os.getenv('SPEECH_REGION', '')
     
     # Google Gemini
     GEMINI_KEY_RAW = os.getenv('GEMINI_API_KEYS', '') or os.getenv('GEMINI_API_KEY', '') or os.getenv('GOOGLE_API_KEY', '')
-    GEMINI_API_KEYS = [k.strip() for k in GEMINI_KEY_RAW.split(',')] if GEMINI_KEY_RAW else []
-    GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
-    SYSTEM_PROMPT = os.getenv('SYSTEM_PROMPT', '').replace('\\n', '\n')
-    GEMINI_SAFE_MODE = os.getenv('GEMINI_SAFE_MODE', 'false').lower() == 'true'  # Single key only, no rotation
+    GEMINI_API_KEYS: List[str] = [k.strip() for k in GEMINI_KEY_RAW.split(',')] if GEMINI_KEY_RAW else []
+    GEMINI_MODEL: str = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
+    SYSTEM_PROMPT: str = os.getenv('SYSTEM_PROMPT', '').replace('\\n', '\n')
+    GEMINI_SAFE_MODE: bool = os.getenv('GEMINI_SAFE_MODE', 'false').lower() == 'true'  # Single key only, no rotation
     
     # App Settings
-    APP_TITLE = "AI Assistant with Live Transcription"
-    DEFAULT_WIDTH = 1200
-    DEFAULT_HEIGHT = 700
-    MIN_WIDTH = 400
-    MIN_HEIGHT = 300
+    APP_TITLE: str = "AI Assistant with Live Transcription"
+    DEFAULT_WIDTH: int = 1200
+    DEFAULT_HEIGHT: int = 700
+    MIN_WIDTH: int = 400
+    MIN_HEIGHT: int = 300
     
     @staticmethod
-    def save_env(speech_keys=None, speech_region=None, gemini_keys=None, gemini_model=None, system_prompt=None):
-        """Save updated credentials and settings to .env file."""
+    def save_env(speech_keys: str = None, speech_region: str = None, gemini_keys: str = None, gemini_model: str = None, system_prompt: str = None) -> tuple[bool, str]:
+        """Save updated credentials and settings to .env file.
+        
+        Returns:
+            tuple[bool, str]: (success, message)
+        """
         env_path = os.path.join(os.getcwd(), '.env')
         
         # Update current session
@@ -91,4 +100,5 @@ class Config:
                 
             return True, "✅ Settings saved permanently!"
         except Exception as e:
+            logger.error(f"⚠️ Saved to memory only. File error: {str(e)}")
             return False, f"⚠️ Saved to memory only. File error: {str(e)}"

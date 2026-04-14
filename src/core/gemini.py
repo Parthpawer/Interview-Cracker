@@ -1,8 +1,13 @@
 import os
 import time
+import logging
+from typing import Generator, Optional, List
 from google import genai
 from google.genai import types
 from src.config import Config
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 
 class GeminiClient:
@@ -35,44 +40,44 @@ class GeminiClient:
 
     # ==================== KEY MANAGEMENT ====================
 
-    def _get_current_key(self):
+    def _get_current_key(self) -> Optional[str]:
         """Return the currently active API key."""
         if not self.api_keys:
             return None
         return self.api_keys[self.current_key_index]
 
-    def _switch_key(self):
+    def _switch_key(self) -> bool:
         """Move to the next API key in the list."""
         if not self.api_keys or len(self.api_keys) <= 1:
             return False
         old_idx = self.current_key_index
         self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-        print(f"🔄 Switching API key: #{old_idx + 1} → #{self.current_key_index + 1}")
+        logger.info(f"[INFO] Switching API key: #{old_idx + 1} → #{self.current_key_index + 1}")
         return True
 
-    def _is_quota_error(self, error_str):
+    def _is_quota_error(self, error_str: str) -> bool:
         """Check if the error is a quota or rate limit error."""
         return any(keyword in error_str for keyword in ["429", "quota", "exhausted", "rate limit"])
 
     # ==================== CLIENT INITIALIZATION ====================
 
-    def _initialize_client(self):
+    def _initialize_client(self) -> bool:
         """Initialize the Gemini client with the current API key."""
         key = self._get_current_key()
         if not key:
-            print("⚠️ No Gemini API keys configured")
+            logger.warning("[WARN] No Gemini API keys configured")
             return False
 
         try:
             self.client = genai.Client(api_key=key)
             self.chat = None  # Reset chat so it gets recreated with new client
-            print(f"✅ Gemini client initialized with key #{self.current_key_index + 1}")
+            logger.info(f"[INFO] Gemini client initialized with key #{self.current_key_index + 1}")
             return True
         except Exception as e:
-            print(f"❌ Gemini init error (key #{self.current_key_index + 1}): {e}")
+            logger.error(f"[ERROR] Gemini init error (key #{self.current_key_index + 1}): {e}")
             return False
 
-    def _ensure_chat(self):
+    def _ensure_chat(self) -> bool:
         """Create a chat session if one doesn't exist."""
         if self.chat:
             return True
@@ -89,30 +94,30 @@ class GeminiClient:
             )
             return True
         except Exception as e:
-            print(f"❌ Error creating chat: {e}")
+            logger.error(f"[ERROR] Error creating chat: {e}")
             return False
 
     # ==================== CONFIGURATION ====================
 
-    def get_full_system_instruction(self):
+    def get_full_system_instruction(self) -> str:
         """Combine fixed system prompt with additional instructions."""
         if self.additional_instructions.strip():
             return f"{self.FIXED_SYSTEM_PROMPT}\n\nAdditional Instructions:\n{self.additional_instructions}"
         return self.FIXED_SYSTEM_PROMPT
 
-    def update_model(self, model_name):
+    def update_model(self, model_name: str) -> bool:
         """Update the model and recreate chat."""
         self.current_model = model_name
         self.chat = None
         return self._ensure_chat()
 
-    def update_instructions(self, instructions):
+    def update_instructions(self, instructions: str) -> bool:
         """Update system instructions and recreate chat."""
         self.additional_instructions = instructions
         self.chat = None
         return self._ensure_chat()
 
-    def get_status(self):
+    def get_status(self) -> dict:
         """Get current client status."""
         return {
             'model': self.current_model,
@@ -123,7 +128,7 @@ class GeminiClient:
 
     # ==================== API CALLS ====================
 
-    def send_message_stream(self, text, model_name: str | None = None):
+    def send_message_stream(self, text: str, model_name: str | None = None) -> Generator:
         """Send text message using dynamic multi-key handling.
         
         Logic:
@@ -153,14 +158,14 @@ class GeminiClient:
 
                 except Exception as e:
                     error_str = str(e).lower()
-                    print(f"❌ API Error (key #{self.current_key_index + 1}): {error_str[:120]}")
+                    logger.error(f"[ERROR] API Error (key #{self.current_key_index + 1}): {error_str[:120]}")
 
                     if self._is_quota_error(error_str):
                         # Switch to next key and retry
                         if attempt < self.MAX_KEYS_PER_REQUEST - 1 and self._switch_key():
                             self.chat = None
                             self._initialize_client()
-                            print(f"🔄 Retrying with key #{self.current_key_index + 1}...")
+                            logger.info(f"[INFO] Retrying with key #{self.current_key_index + 1}...")
                             continue
                         else:
                             raise Exception("⚠️ API quota exceeded. Please try again in a few minutes.")
@@ -177,7 +182,7 @@ class GeminiClient:
                 self.current_model = original_model
                 self.chat = None
 
-    def send_screenshot_stream(self, image_bytes, prompt="What do you see in this screenshot? Please describe it and provide any relevant insights or help."):
+    def send_screenshot_stream(self, image_bytes: bytes, prompt: str = "What do you see in this screenshot? Please describe it and provide any relevant insights or help.") -> Generator:
         """Send screenshot using dynamic multi-key handling.
         
         Same logic as send_message_stream:
@@ -204,13 +209,13 @@ class GeminiClient:
 
             except Exception as e:
                 error_str = str(e).lower()
-                print(f"❌ Screenshot Error (key #{self.current_key_index + 1}): {error_str[:120]}")
+                logger.error(f"[ERROR] Screenshot Error (key #{self.current_key_index + 1}): {error_str[:120]}")
 
                 if self._is_quota_error(error_str):
                     if attempt < self.MAX_KEYS_PER_REQUEST - 1 and self._switch_key():
                         self.chat = None
                         self._initialize_client()
-                        print(f"🔄 Retrying screenshot with key #{self.current_key_index + 1}...")
+                        logger.info(f"[INFO] Retrying screenshot with key #{self.current_key_index + 1}...")
                         continue
                     else:
                         raise Exception("⚠️ API quota exceeded. Please try again in a few minutes.")

@@ -1,4 +1,6 @@
 import threading
+import logging
+from typing import List, Optional
 import numpy as np
 import pyaudiowpatch as pyaudio
 import azure.cognitiveservices.speech as speechsdk
@@ -6,17 +8,21 @@ from azure.cognitiveservices.speech.audio import AudioStreamFormat, PushAudioInp
 from src.config import Config
 from src.utils.helpers import resample_audio
 
+# Initialize logger
+logger = logging.getLogger(__name__)
+
 class AudioTranscriber:
     """Handles audio capture and Azure Speech transcription."""
     
     def __init__(self, signals):
-        self.signals = signals
-        self.is_transcribing = False
-        self.transcription_thread = None
-        self.audio_stream = None
-        self.speech_recognizer = None
+        self.signals: object = signals
+        self.is_transcribing: bool = False
+        self.transcription_thread: Optional[threading.Thread] = None
+        self.audio_stream: Optional[PushAudioInputStream] = None
+        self.speech_recognizer: Optional[speechsdk.SpeechRecognizer] = None
+        self.use_microphone: bool = False
 
-    def start(self, api_keys, region):
+    def start(self, api_keys: List[str], region: str, use_microphone: bool = False) -> bool:
         """Start transcription."""
         if not api_keys or not region:
             self.signals.status_update.emit("Error: Set Azure API key and region in Settings")
@@ -25,14 +31,15 @@ class AudioTranscriber:
         # Parse string if necessary, though it should be a list based on new Config
         if isinstance(api_keys, str):
             api_keys = [k.strip() for k in api_keys.split(',')]
-            
+             
         self.api_keys = [k for k in api_keys if k]
         if not self.api_keys:
-             self.signals.status_update.emit("Error: No valid Azure API keys found")
-             return False
-             
+              self.signals.status_update.emit("Error: No valid Azure API keys found")
+              return False
+               
         self.current_key_idx = 0
         self.switch_key_requested = False
+        self.use_microphone = use_microphone
 
         self.is_transcribing = True
         self.signals.status_update.emit("Status: Starting transcription...")
@@ -54,10 +61,10 @@ class AudioTranscriber:
             except:
                 pass
 
-    def _transcription_worker(self, region):
+    def _transcription_worker(self, region: str):
         """Worker thread for audio capture and transcription."""
-        p = None
-        stream = None
+        p: Optional[pyaudio.PyAudio] = None
+        stream: Optional[pyaudio.Stream] = None
         
         while self.is_transcribing:
             self.switch_key_requested = False
@@ -66,6 +73,8 @@ class AudioTranscriber:
             try:
                 speech_config = speechsdk.SpeechConfig(subscription=current_api_key, region=region)
                 speech_config.speech_recognition_language = "en-US"
+                # Reduce segmentation silence timeout for faster phrase finalization (default is usually 1000ms)
+                speech_config.set_property(speechsdk.PropertyId.Speech_SegmentationSilenceTimeoutMs, "500")
                 
                 audio_format = AudioStreamFormat(samples_per_second=16000, bits_per_sample=16, channels=1)
                 self.audio_stream = PushAudioInputStream(stream_format=audio_format)
@@ -99,29 +108,41 @@ class AudioTranscriber:
                 
                 self.speech_recognizer.start_continuous_recognition()
             except Exception as e:
+                logger.error(f"Azure initialization error: {str(e)}")
                 self.signals.status_update.emit(f"Azure initialization error: {str(e)}")
                 self.is_transcribing = False
                 break
             
             p = pyaudio.PyAudio()
-            wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
-            default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
             
-            loopback_device = None
-            if default_speakers.get("isLoopbackDevice"):
-                loopback_device = default_speakers
+            # Select audio input device based on user preference
+            if self.use_microphone:
+                # Use default microphone input device
+                device_info = p.get_default_input_device_info()
+                self.signals.status_update.emit("Status: Using microphone input...")
             else:
-                for loopback in p.get_loopback_device_info_generator():
-                    if default_speakers["name"] in loopback["name"]:
-                        loopback_device = loopback
-                        break
+                # Use system audio (loopback) - existing behavior
+                wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+                default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
+                
+                loopback_device = None
+                if default_speakers.get("isLoopbackDevice"):
+                    loopback_device = default_speakers
+                else:
+                    for loopback in p.get_loopback_device_info_generator():
+                        if default_speakers["name"] in loopback["name"]:
+                            loopback_device = loopback
+                            break
+                
+                if not loopback_device:
+                    self.signals.status_update.emit("Error: No loopback device found")
+                    return
+                
+                device_info = loopback_device
+                self.signals.status_update.emit("Status: Using system audio input...")
             
-            if not loopback_device:
-                self.signals.status_update.emit("Error: No loopback device found")
-                return
-            
-            device_channels = loopback_device["maxInputChannels"]
-            device_rate = int(loopback_device["defaultSampleRate"])
+            device_channels = device_info["maxInputChannels"]
+            device_rate = int(device_info["defaultSampleRate"])
             
             CHUNK = 1024
             stream = p.open(
@@ -130,7 +151,7 @@ class AudioTranscriber:
                 rate=device_rate,
                 input=True,
                 frames_per_buffer=CHUNK,
-                input_device_index=loopback_device["index"]
+                input_device_index=device_info["index"]
             )
             
             self.signals.status_update.emit("Status: Recording and transcribing...")
