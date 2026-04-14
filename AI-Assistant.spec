@@ -46,6 +46,8 @@ a = Analysis(
         'numpy',
         'dotenv',
         'ctypes',
+        'typing',  # Added for type hints used throughout the codebase
+        'logging',  # Added for logging configuration
         'src',
         'src.core',
         'src.core.audio',

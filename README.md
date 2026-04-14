@@ -8,15 +8,18 @@ Built with **Python** and **PyQt6**, it integrates advanced cloud and local AI m
 
 ## 🚀 Features
 
-- 🎙️ **Live Audio Transcription:** Capture system audio and transcribe it using Azure Cognitive Services with real-time updates.
+### Core Features
+ 
+- 🎙️ **Live Audio Transcription:** Capture system audio or microphone input and transcribe it using Azure Cognitive Services with real-time updates.
 - 🖼️ **Screenshot-to-Insight:** Share desktop screenshots and receive contextual help or explanations from Gemini AI.
 - 💬 **Conversational Chat:** Chat-like interface for smooth interaction with AI and live transcriptions.
 - ⚡ **Streamed Responses:** Get assistant replies instantly with streaming output.
 - ⌨️ **Hotkeys & Controls:** Easily start/stop transcription, take screenshots, or manage messages.
 - 🔐 **API Flexibility:** Configure Azure & Gemini API keys and models via UI or `.env`.
-- 🧩 **Rich Media Support:** Handles system audio, screenshots, markdown replies, and themed UI.
+- 🧩 **Rich Media Support:** Handles system audio, microphone input, screenshots, markdown replies, and themed UI.
 - 📦 **Windows Packaging:** Ready-to-deploy executable built using PyInstaller.
 - 🔄 **CI/CD:** Automated builds and releases via GitHub Actions.
+- 🛠️ **Code Quality Improvements:** Recent updates include type hints throughout core modules and professional logging infrastructure for better maintainability and debugging.
 
 ---
 
@@ -53,7 +56,7 @@ Alternatively, configure these within the app’s settings UI.
 To package the application:
 
 ```bash
-pyinstaller AI-Assistant.spec
+pyinstaller --clean AI-Assistant.spec
 ```
 
 The final executable will be in `dist/AI-Assistant.exe`.
@@ -65,6 +68,7 @@ The final executable will be in `dist/AI-Assistant.exe`.
 | Action | Description |
 |--------|--------------|
 | **Start/Stop Transcription** | Toggle real-time audio transcription |
+| **Select Audio Source** | Use toggle button to switch between system audio and microphone input |
 | **Send Screenshot** | Use hotkey `Alt+X` to capture and send a screenshot |
 | **Chat Interaction** | View AI responses and transcription history |
 | **Settings** | Update API keys, model preferences, and app configuration |
@@ -88,6 +92,7 @@ python main.py
 | `src/utils/` | Helper functions |
 | `styles.qss` | External stylesheet |
 | `AI-Assistant.spec` | PyInstaller config |
+| `interview_cracker.log` | Application log file (generated at runtime) |
 | `.github/workflows/` | CI/CD configurations |
 
 ---
@@ -111,7 +116,7 @@ GitHub will automatically build the app and create a **Release** with the `.exe`
 ## 🏗️ Architecture Overview
 
 ### Core Components
-- **Audio Capture:** WASAPI loopback for system-level recording
+- **Audio Capture:** WASAPI loopback for system-level recording or direct microphone input
 - **Speech-to-Text:** Azure Cognitive Services
 - **AI Backend:** Google Gemini for contextual and creative responses
 - **UI Framework:** PyQt6 for GUI design and interaction

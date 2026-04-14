@@ -41,7 +41,7 @@ class MainWindow(QWidget):
         self.update_timer = None
         self.buffer_text = ""
         self.batch_timer = QTimer(self)
-        self.batch_timer.setInterval(2000) # 2 seconds silence buffer
+        self.batch_timer.setInterval(1200) # Reduced from 2s to 1.2s for faster response
         self.batch_timer.setSingleShot(True)
         self.batch_timer.timeout.connect(self._flush_transcription_buffer)
         
@@ -173,6 +173,15 @@ class MainWindow(QWidget):
         self.transcribe_button = QPushButton("🎤 Start Transcription")
         self.transcribe_button.setProperty("class", "transcribe-btn")
         
+        # Audio source toggle button
+        self.audio_source_button = QPushButton("🎤 System Audio")
+        self.audio_source_button.setProperty("class", "audio-source-btn")
+        self.audio_source_button.setCheckable(True)
+        self.audio_source_button.setChecked(False)  # False = System Audio, True = Microphone
+        self.audio_source_button.clicked.connect(self.toggle_audio_source)
+        self.audio_source_button.setFixedHeight(36)
+        self.audio_source_button.setFixedWidth(120)
+        
         self.ai_mode_button = QPushButton("AI Mode: OFF ❌")
         self.ai_mode_button.setProperty("class", "ai-mode-btn")
         self.ai_mode_button.clicked.connect(self.toggle_ai_mode)
@@ -183,6 +192,7 @@ class MainWindow(QWidget):
         self.status_label.setStyleSheet("color: #a0a0a0; font-size: 12px;")
         
         control_layout.addWidget(self.transcribe_button)
+        control_layout.addWidget(self.audio_source_button)
         control_layout.addWidget(self.ai_mode_button)
         control_layout.addWidget(self.status_label)
         control_layout.addStretch()
@@ -368,6 +378,15 @@ class MainWindow(QWidget):
             self.ai_mode_button.setText("AI Mode: OFF ❌")
             self.signals.status_update.emit("AI Mode disabled")
 
+    def toggle_audio_source(self):
+        """Toggle between system audio and microphone input."""
+        if self.audio_source_button.isChecked():
+            self.audio_source_button.setText("🎤 Microphone")
+            self.signals.status_update.emit("Audio source set to Microphone")
+        else:
+            self.audio_source_button.setText("🎤 System Audio")
+            self.signals.status_update.emit("Audio source set to System Audio")
+
     def on_model_changed(self, model_name):
         """Handle model change."""
         self.gemini_client.update_model(model_name)
@@ -432,7 +451,10 @@ class MainWindow(QWidget):
                  api_keys = ",".join(Config.SPEECH_KEYS)
             region = self.azure_region_input.text() or Config.SPEECH_REGION
             
-            if self.audio_transcriber.start(api_keys, region):
+            # Get audio source selection: False = System Audio, True = Microphone
+            use_microphone = self.audio_source_button.isChecked()
+            
+            if self.audio_transcriber.start(api_keys, region, use_microphone):
                 self.transcribe_button.setText("⏹ Stop Transcription")
                 self.transcribe_button.setProperty("class", "transcribe-btn-active")
                 self.transcribe_button.style().unpolish(self.transcribe_button)
@@ -440,16 +462,16 @@ class MainWindow(QWidget):
         else:
             self.audio_transcriber.stop()
             self.batch_timer.stop()
-
+            
             buffered_text = self.buffer_text.strip()
             self.buffer_text = ""
-
+            
             if self.ai_mode_on and buffered_text:
                 self.signals.status_update.emit("🤖 Thinking...")
                 self.send_to_gemini(buffered_text)
             else:
                 self.signals.status_update.emit("Status: Stopped | Press Alt+X for screenshot")
-
+            
             self.transcribe_button.setText("🎤 Start Transcription")
             self.transcribe_button.setProperty("class", "transcribe-btn")
             self.transcribe_button.style().unpolish(self.transcribe_button)
@@ -465,12 +487,10 @@ class MainWindow(QWidget):
                 else:
                     self.buffer_text = clean_text
                 self.batch_timer.start()
-                self.signals.status_update.emit("Status: Listening... buffering speech...")
+                self.signals.status_update.emit("Status: Listening...")
 
     def _flush_transcription_buffer(self):
-        """No-op flush during transcription to preserve stop-triggered behavior."""
-        if self.audio_transcriber.is_transcribing:
-            return
+        # We now allow auto-flushing while transcribing to reduce buffer delay.
 
         if not self.buffer_text:
             return
@@ -482,8 +502,8 @@ class MainWindow(QWidget):
             self.signals.status_update.emit("AI Mode is OFF — transcription preserved only")
             return
 
-        if len(text_to_send) <= 10 and "?" not in text_to_send:
-            self.signals.status_update.emit("Short phrase detected — continuing to buffer speech.")
+        if len(text_to_send) <= 5 and "?" not in text_to_send:
+            self.signals.status_update.emit("Short phrase detected — continuing to buffer...")
             return
 
         self.send_to_gemini(text_to_send)
@@ -497,7 +517,7 @@ class MainWindow(QWidget):
             self.signals.status_update.emit("Error: Gemini API not configured")
             return
 
-        trimmed_text = text.strip()[-300:]
+        trimmed_text = text.strip()[-3000:]
         self.signals.status_update.emit("🤖 Thinking...")
 
         def gemini_worker():

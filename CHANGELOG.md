@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - **Entry Point**: New `main.py` entry point.
 
 ### Changed
+- **Folder Maintenance**: Cleaned up obsolete configuration files (`abc.spec`) and redundant test scripts (`test_rotation.py` moved to `tests/`), keeping only the necessary `AI-Assistant.spec`. Removed temporary `build/` directories.
 - **Refactoring**: Split the monolithic `another.py` into:
     - `src/core/audio.py`: Azure Speech transcription logic.
     - `src/core/gemini.py`: Google Gemini API integration.
